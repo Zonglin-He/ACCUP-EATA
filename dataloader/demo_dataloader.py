@@ -198,18 +198,23 @@ def few_shot_data_generator(data_loader, dataset_configs, num_samples=5):
 
     return few_shot_loader
 
-def whole_targe_data_generator_demo(data_path, domain_id, dataset_configs, hparams, seed_id = 1):
-    train_dataset_file = torch.load(os.path.join(data_path, f"{'train'}_{domain_id}.pt"))
-    test_dataset_file = torch.load(os.path.join(data_path, f"{'test'}_{domain_id}.pt"))
+def whole_targe_data_generator_demo(data_path, domain_id, dataset_configs, hparams, seed_id=1):
+    """只用于评测目标域：严格只读 test_{domain_id}.pt，避免任何训练集泄漏。"""
+    # 只读目标域 test
+    test_dataset_file = torch.load(
+        os.path.join(data_path, f"test_{domain_id}.pt"),
+        weights_only=False  # 若用的是新 PyTorch 可改为 True
+    )
 
-    whole_dataset = Load_ALL_Dataset(train_dataset_file, test_dataset_file, dataset_configs, seed_id=seed_id)
-    shuffle = False
-    drop_last = False
+    # 用带增强的单域加载器（会返回 (x, aug, aug2)）
+    whole_dataset = Load_Dataset(test_dataset_file, dataset_configs, seed_id=seed_id)
 
-    data_loader = torch.utils.data.DataLoader(dataset=whole_dataset,
-                                              batch_size=hparams["batch_size"],
-                                              shuffle=shuffle,
-                                              drop_last=drop_last,
-                                              num_workers=0)
-
+    data_loader = torch.utils.data.DataLoader(
+        dataset=whole_dataset,
+        batch_size=hparams["batch_size"],
+        shuffle=False,     # 评测不打乱
+        drop_last=False,   # 不丢最后一批
+        num_workers=0
+    )
+    print(f"[DEBUG] eval only test_{domain_id}.pt  | size={len(whole_dataset)}")  # 可留作确认
     return data_loader

@@ -13,15 +13,18 @@ from datetime import datetime
 import numpy as np
 
 from utils.utils import fix_randomness, starting_logs, AverageMeter
-from tta_abstract_trainer import TTAAbstractTrainer
+from .tta_abstract_trainer import TTAAbstractTrainer
 from optim.optimizer import build_optimizer
 
 warnings.filterwarnings("ignore", category=sklearn.exceptions.UndefinedMetricWarning)
 parser = argparse.ArgumentParser()
 
+
+
 class TTATrainer(TTAAbstractTrainer):
     """
    This class contain the main training functions for our method.
+   训练方法
     """
     def __init__(self, args): # TTATrainer 初始化
         super(TTATrainer, self).__init__(args) #调用父类的初始化方法
@@ -36,11 +39,12 @@ class TTATrainer(TTAAbstractTrainer):
         risks_columns = ["scenario", "run", "trg_risk"]
         table_risks = pd.DataFrame(columns=risks_columns)
 
-        for src_id, trg_id in self.dataset_configs.scenarios: #遍历所有源-目标域对
+        for src_id, trg_id in self.dataset_configs.scenarios: #遍历所有源目标域对
             cur_scenario_f1_ret = []
             for run_id in range(self.num_runs): #对于每个源-目标域对，进行多次运行以计算平均性能
                 self.run_id = run_id
                 fix_randomness(run_id)
+                print(run_id)
                 self.logger, self.scenario_log_dir = starting_logs(self.dataset, self.da_method, self.exp_log_dir, src_id, trg_id, run_id)
                 self.pre_loss_avg_meters = collections.defaultdict(lambda: AverageMeter())
                 self.loss_avg_meters = collections.defaultdict(lambda: AverageMeter())
@@ -60,7 +64,7 @@ class TTATrainer(TTAAbstractTrainer):
                 non_adapted_model_state, pre_trained_model = self.pre_train() #预训练源模型
                 self.save_checkpoint(self.home_path, self.scenario_log_dir, non_adapted_model_state) #保存预训练模型检查点
 
-                ## if finshed pre_train. we can directly load pretrainModel from checkpoint ###
+                ## if finished pre_train. we can directly load pretrainModel from checkpoint ###
                 # load_pretrained_checkpoint_path = os.path.join(self.load_pretrained_checkpoint, src_id + "_to_" + trg_id + "_run_" + str(run_id))
                 # pre_trained_model = self.initialize_pretrained_model()
                 # pre_trained_model_chk = self.load_checkpoint(load_pretrained_checkpoint_path)  # all method load same pretrained model.
@@ -110,7 +114,7 @@ if __name__ == "__main__":
     # ========= Select the BACKBONE ==============
     parser.add_argument('--backbone', default='CNN', type=str, help='Backbone of choice: (CNN - RESNET18 - TCN)')
     # ========= Experiment settings ===============
-    parser.add_argument('--num_runs', default=3, type=int, help='Number of consecutive run with different seeds')
+    parser.add_argument('--num_runs', default=1, type=int, help='Number of consecutive run with different seeds')
     parser.add_argument('--device', default="cuda", type=str, help='cpu or cuda')
 
     args = parser.parse_args() #解析命令行参数

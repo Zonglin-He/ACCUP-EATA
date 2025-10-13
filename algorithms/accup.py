@@ -71,7 +71,8 @@ class ACCUP(BaseTestTimeAlgorithm): #定义ACCUP类，继承自BaseTestTimeAlgor
         cat_p = torch.cat([r_output, a_output, p], dim=0) # 将原始、增强和平均的输出 logits 拼接（形成包含三种视图的集合C = X ∪ A ∪ 平均)
         cat_pseudo_labels = pseudo_labels.repeat(3) # 将每个样本的最终伪标签重复3次，对应拼接后的原始、增强、平均三个视图
         loss += domain_contrastive_loss(cat_p, cat_pseudo_labels, temperature=self.temperature, device=z.device)
-        # 计算领域对比损失，促使同类样本在特征空间更接近，不同类样本更远离
+
+    # 计算领域对比损失，促使同类样本在特征空间更接近，不同类样本更远离
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
