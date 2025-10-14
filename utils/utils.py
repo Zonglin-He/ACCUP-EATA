@@ -184,8 +184,8 @@ class simple_MLP(nn.Module): #简单的多层感知机，用于域分类器
     def forward(self, x, **kwargs):
         x = self.nonlin(self.dense0(x))
         x = self.softmax(self.output(x))
-        return x   
-    
+        return x
+
 def get_weight_gpu(source_feature, target_feature, validation_feature, configs, device): #计算源域和目标域样本的权重
     """
     :param source_feature: shape [N_tr, d], features from training set
@@ -202,14 +202,14 @@ def get_weight_gpu(source_feature, target_feature, validation_feature, configs, 
     target_feature = target_feature.to(device)
     all_feature = torch.cat((source_feature, target_feature), dim=0)
     all_label = torch.from_numpy(np.asarray([1] * N_s + [0] * N_t, dtype=np.int32)).long()
-    
+
     feature_for_train, feature_for_test, label_for_train, label_for_test = train_test_split(all_feature, all_label,
                                                                                             train_size=0.8)
     learning_rates = [1e-1, 5e-2, 1e-2]
     val_acc = []
     domain_classifiers = []
-    
-    for lr in learning_rates:    
+
+    for lr in learning_rates:
         domain_classifier = NeuralNetClassifier(
             simple_MLP,
             module__inp_units = configs.final_out_channels * configs.features_len,
@@ -225,7 +225,7 @@ def get_weight_gpu(source_feature, target_feature, validation_feature, configs, 
         acc = np.mean((label_for_test.numpy() == output).astype(np.float32))
         val_acc.append(acc)
         domain_classifiers.append(domain_classifier)
-    
+
     index = val_acc.index(max(val_acc))
     domain_classifier = domain_classifiers[index]
 
@@ -275,3 +275,134 @@ def set_named_submodule(model, sub_name, value): #根据子模块名称设置子
 
         else:
             setattr(module, names[i], value)
+
+# 可放到 trainers/eata_utils.py（或你项目中合适的位置）
+# trainers/eata_utils.py
+import math
+import torch
+import torch.nn.functional as F
+from typing import Optional, Dict
+
+class EATAMemory:
+    def __init__(self, maxlen: int = 4096, device: str = "cpu"):
+        self.maxlen = maxlen
+        self.device = device
+        self._feats = None    # [M, D], unit-normalized
+        self._probs = None    # [M, C]
+
+    def __len__(self):
+        return 0 if self._feats is None else int(self._feats.size(0))
+
+    @torch.no_grad()
+    def push(self, feats: torch.Tensor, probs: torch.Tensor):
+        feats = F.normalize(feats.detach(), dim=1).to(self.device)
+        probs = probs.detach().to(self.device)
+        if self._feats is None:
+            self._feats = feats[-self.maxlen:]
+            self._probs = probs[-self.maxlen:]
+            return
+        self._feats = torch.cat([self._feats, feats], dim=0)[-self.maxlen:]
+        self._probs = torch.cat([self._probs, probs], dim=0)[-self.maxlen:]
+
+    @torch.no_grad()
+    def density(self, feats: torch.Tensor, K: int = 5):
+        """用记忆库计算每个当前样本的‘冗余度’（对记忆库特征的平均TopK余弦相似度）。
+           值越大=越像过去见过的=越冗余；越小=越新颖。"""
+        if self._feats is None or len(self) == 0:
+            dens = torch.full((feats.size(0),), float("nan"), device=feats.device)
+            return dens, {"mean": float("nan"), "med": float("nan"), "p90": float("nan")}, 0
+
+        feats = F.normalize(feats, dim=1)
+        sims = feats @ self._feats.T                     # [B, M]
+        k_eff = min(K, sims.size(1))
+        topk, _ = torch.topk(sims, k=k_eff, dim=1)       # [B, k_eff]
+        dens = topk.mean(dim=1)                          # 越大越“像”记忆库
+        stats = {
+            "mean": float(torch.nanmean(dens).item()),
+            "med" : float(torch.nanmedian(dens).item()),
+            "p90" : float(torch.nanquantile(dens, 0.90).item())
+        }
+        return dens, stats, k_eff
+
+    @torch.no_grad()
+    def mean_probs(self) -> Optional[torch.Tensor]:
+        return None if self._probs is None else self._probs.mean(dim=0)
+
+
+def softmax_entropy_from_logits(logits: torch.Tensor) -> torch.Tensor:
+    probs = torch.softmax(logits, dim=1)
+    return -(probs * (probs.clamp_min(1e-8)).log()).sum(dim=1)
+
+
+@torch.no_grad()
+def select_eata_indices(
+    logits: torch.Tensor,                   # [B, C]
+    feats: torch.Tensor,                    # [B, D]（未归一化也行）
+    num_classes: int,
+    memory: EATAMemory,
+    e_margin_scale: float = 0.85,           # 低熵阈比例 * ln(C)
+    d_margin: float = 0.0,                  # 密度阈偏移；>0 更苛刻
+    K: int = 5,                             # 密度TopK
+    temperature: float = 0.7,               # 仅用于日志/一致性
+    warmup_min: int = 128,                  # 记忆库小于该值，用“热身策略”
+    use_quantile: bool = True,              # 用分位数改良阈值
+    quantile: float = 0.70,                 # 低熵筛的分位数（70%）
+    safety_keep_frac: float = 0.125         # 防空选：保留比例
+):
+    B = logits.size(0)
+    ent = softmax_entropy_from_logits(logits)                     # [B]
+    base = math.log(max(2, int(num_classes))) * e_margin_scale
+    if use_quantile:
+        qth = torch.quantile(ent, quantile).item()
+        e_th = min(base, qth)                                     # 更宽松
+    else:
+        e_th = base
+
+    # Step1: 低熵样本
+    keep_ent = ent < e_th
+    idx_ent = torch.where(keep_ent)[0]
+
+    # Step2: 密度去冗余（优先保留“新颖”的）
+    dens, stats, k_eff = memory.density(feats, K=K)
+    if k_eff > 0:
+        dens_th = (stats["med"] if not math.isnan(stats["med"]) else 0.0) - d_margin
+        keep_dens = torch.isnan(dens) | (dens < dens_th)
+        idx = torch.where(keep_ent & keep_dens)[0]
+    else:
+        idx = idx_ent
+
+    # Step3: 热身 & 防空选
+    if len(memory) < warmup_min:
+        # 热身：先按低熵保留；若为空，再保留 top-k 自信样本
+        if idx.numel() == 0:
+            k = max(1, int(B * safety_keep_frac))
+            idx = torch.topk(-ent, k).indices
+    else:
+        if idx.numel() == 0:
+            k = max(1, int(B * safety_keep_frac))
+            idx = torch.topk(-ent, k).indices
+
+    # 日志字符串（外层打印）
+    log = (f"[EATA] K={k_eff} dens[mean/med/p90]={stats['mean']:.3f}/"
+           f"{stats['med']:.3f}/{stats['p90']:.3f}  | "
+           f"e_th={e_th:.3f} (base={base:.3f}, q{int(quantile*100)}={qth if use_quantile else float('nan'):.3f})")
+
+    return idx, log
+
+
+
+# ======= 集成示例（放到你的 ACCUP/TTA 训练循环里）=======
+# 1) 初始化一次（如在 trainer.__init__）
+#   self.eata_memory = EATAMemory(maxlen=4096, device=self.device)
+
+# 2) 每个 test batch 内，在拿到 logits、feats 后调用：
+#   idx = select_eata_indices(
+#       logits=logits, feats=feats,
+#       num_classes=self.num_classes,
+#       e_margin_scale=self.hparams.get('e_margin_scale', 0.55),
+#       d_margin=self.hparams.get('d_margin', 0.04),
+#       K=self.hparams.get('filter_K', 10),
+#       memory=self.eata_memory,
+#       temperature=self.hparams.get('temperature', 1.0),
+#   )
+#   # 用 idx 对 x / pseudo_y / loss 做后续 ACCUP+EATA 的自适应更新
