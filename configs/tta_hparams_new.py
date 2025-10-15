@@ -87,7 +87,7 @@ class HAR():
             'steps': 1,
             'optim_method': 'adam',
             'momentum': 0.9,
-            'grad_clip': 0.05,
+            'grad_clip': 0.1,
             'grad_clip_value': None
         }
         # 关键：加入 EATA 的开关和超参
@@ -95,9 +95,9 @@ class HAR():
             'ACCUP': {
                 'pre_learning_rate': 5e-4,
                 'learning_rate': 3e-5,  # TTA 基础 lr；如果代码支持分组，BN 用 5e-5
-                'filter_K': 0,  # 7 -> 9，密度估计更稳
+                'filter_K': 10,  # 7 -> 9，密度估计更稳
                 'tau': 20,
-                'temperature': 3.0,  # 0.6 -> 0.55，略锐化
+                'temperature': 2.0,  # 0.6 -> 0.55，略锐化
 
                 # EATA
                 'use_eata_select': True,
@@ -105,7 +105,7 @@ class HAR():
                 'e_margin_scale': 0.70,  # 0.35 -> 0.30，放宽
                 'd_margin': 0.05,
                 'lambda_eata': 1.0,
-                'warmup_min': 12,
+                'warmup_min': 24,
                 'quantile': 0.90,
                 'safety_keep_frac': 0.65,  # 0.4 -> 0.5，保底更多
                 'memory_size': 4096,
