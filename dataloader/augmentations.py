@@ -4,37 +4,32 @@ from utils.utils import fix_randomness
 
 def DataTransform(sample, config, seed_id): # 根据数据集名称选择幅度扭曲参数，生成两种增强
     fix_randomness(seed_id) # 每次调用时固定随机种子，保证两种增强结果一致
-    cur_dataseet_name = config.__class__.__name__
-    if cur_dataseet_name == 'HAR': # 对HAR：sigma=0.1, knot=150
-        aug = magnitude_warp(sample, sigma=0.1, knot=150)
-    elif cur_dataseet_name == 'EEG': # 对EEG：sigma=0.1, knot=30
-        aug = magnitude_warp(sample, sigma=0.1, knot=30)
-    elif cur_dataseet_name == 'FD': # 对FD：sigma=0.01, knot=150 （FD数据噪声更小？因此扰动幅度更小）
-        aug = magnitude_warp(sample, sigma=0.01, knot=150)
-    else: 
-        raise NameError
-    #############################################
-    aug2 = magnitude_warp(sample, sigma=0.1, knot=30) # 第二种增强：sigma=0.1, knot=30
-    #aug 针对当前数据集配置的幅度扭曲增强结果 aug2 = 另一份增强（固定参数sigma=0.1, knot=30），作为额外视图
-    return aug, aug2 
+    name = config.__class__.__name__
 
-def jitter(x, sigma = 0.1): # 抖动噪声增强：对输入数据每个值加入均值0、标准差sigma的高斯噪声
+    if name == 'HAR':  # 原: sigma=0.1, knot=150
+        aug = magnitude_warp(sample, sigma=0.05, knot=32)
+        aug2 = magnitude_warp(sample, sigma=0.10, knot=16)
+    elif name == 'EEG':  # 原: sigma=0.1, knot=30
+        aug = magnitude_warp(sample, sigma=0.05, knot=16)
+        aug2 = magnitude_warp(sample, sigma=0.10, knot=8)
+    elif name == 'FD':  # 原: sigma=0.01, knot=150
+        aug = magnitude_warp(sample, sigma=0.02, knot=32)
+        aug2 = magnitude_warp(sample, sigma=0.05, knot=16)
+    else:
+        raise NameError
+    return aug, aug2
+
+def jitter(x, sigma = 0.04): # 抖动噪声增强：对输入数据每个值加入均值0、标准差sigma的高斯噪声
     if not isinstance(x, np.ndarray):
         x = x.cpu().numpy()
      # 输入 x 可为 numpy 或 tensor，若为tensor则先转numpy。返回添加噪声后的数组
     return x + np.random.normal(loc=0., scale=sigma, size=x.shape)
 
-def scaling(x, sigma=0.1): # 缩放增强：对每个通道乘以一个均值1、标准差sigma的高斯随机数
+def scaling(x, sigma=0.05):
     if not isinstance(x, np.ndarray):
         x = x.cpu().numpy()
-    factor = np.random.normal(loc=1., scale = sigma, size=(x.shape[0], x.shape[2])) 
-    #随机生成形状 (N, L) 的缩放因子矩阵factor（N为样本数，L为序列长度）
-    ai = []
-    for i in range(x.shape[1]):  # 对每个通道 i，将该通道数据 xi 乘以 factor，实现每个时间点一个随机缩放
-        xi = x[:, i, :]
-        ai.append(np.multiply(xi, factor[:, :])[:, np.newaxis, :]) 
-        # 将各通道处理后的结果重新拼接为与原数据相同形状 (N, C, L)
-    return np.concatenate((ai), axis=1)
+    factor = np.random.normal(1., sigma, size=(x.shape[0], x.shape[1], 1))  # (N,C,1)
+    return x * factor
 
 def window_slice(x, reduce_ratio=0.9): 
     # 窗口切片增强：随机裁剪并重新缩放时间轴长度。
@@ -44,7 +39,7 @@ def window_slice(x, reduce_ratio=0.9):
     target_len = np.ceil(reduce_ratio * x.shape[1]).astype(int) # 计算裁剪后目标长度
      # 若目标长度大于等于原长度，则不裁剪，直接返回原数据
     if target_len >= x.shape[1]:
-        return x
+        return x.transpose((0, 2, 1))
     starts = np.random.randint(low=0, high=x.shape[1] - target_len, size=(x.shape[0])).astype(int)
     # 对每个样本随机选择一个起点starts，在 [0, L-target_len) 范围，然后提取该区间长度target_len的序列片段
     ends = (target_len + starts).astype(int) # 计算每个样本的终点ends
@@ -119,7 +114,7 @@ def permutation(x, max_segments=5, seg_mode="random"): # 顺序排列增强：�
                 splits = np.array_split(orig_steps, num_segs[i])
                 # 否则平均分成 num_segs 段
             warp = np.concatenate(np.random.permutation(splits)).ravel() # 随机打乱各段顺序并重新拼接
-            ret[i] = pat[0, warp] # 按打乱后的时间步索引 warp 重排原序列
+            ret[i] = pat[:, warp] # 按打乱后的时间步索引 warp 重排原序列
         else:
             ret[i] = pat # 若只分成1段，则不变
 

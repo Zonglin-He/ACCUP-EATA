@@ -144,7 +144,7 @@ def data_generator_demo(data_path, domain_id, dataset_configs, hparams, dtype):
     dataset = Load_Dataset(dataset_file, dataset_configs)
     if dtype == "test":
         shuffle = False
-        drop_last = False
+        drop_last = True
     else:
         shuffle = dataset_configs.shuffle
         drop_last = dataset_configs.drop_last
@@ -194,7 +194,7 @@ def few_shot_data_generator(data_loader, dataset_configs, num_samples=5):
     few_shot_dataset = Load_Dataset(few_shot_dataset, dataset_configs)
 
     few_shot_loader = torch.utils.data.DataLoader(dataset=few_shot_dataset, batch_size=len(few_shot_dataset),
-                                                  shuffle=False, drop_last=False, num_workers=0)
+                                                  shuffle=False, drop_last=True, num_workers=0)
 
     return few_shot_loader
 
@@ -213,7 +213,7 @@ def whole_targe_data_generator_demo(data_path, domain_id, dataset_configs, hpara
         dataset=whole_dataset,
         batch_size=hparams["batch_size"],
         shuffle=False,     # 评测不打乱
-        drop_last=False,   # 不丢最后一批
+        drop_last=True,   # 不丢最后一批
         num_workers=0
     )
     print(f"[DEBUG] eval only test_{domain_id}.pt  | size={len(whole_dataset)}")  # 可留作确认

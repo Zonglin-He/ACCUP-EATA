@@ -6,7 +6,7 @@ def domain_contrastive_loss(domains_features, domains_labels, temperature,device
     anchor_feature = F.normalize(anchor_feature, dim=1)
     labels = domains_labels
     labels= labels.contiguous().view(-1, 1)
-     # 规范化特征向量 & 整理标签 shape：(N,1)
+     # 规范化特征向量 & 整理标签 shape：(N,
 
     mask = torch.eq(labels, labels.T).float().to(device) # shape：(N,N)，相同标签为1，不同为0
     anchor_dot_contrast = torch.div(torch.matmul(anchor_feature, anchor_feature.T), temperature)

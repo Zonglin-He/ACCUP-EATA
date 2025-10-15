@@ -97,7 +97,7 @@ class HAR(): # 数据集 (HAR) 参数
         self.class_names = ['walk', 'upstairs', 'downstairs', 'sit', 'stand', 'lie']
         self.sequence_len = 128
         self.shuffle = True
-        self.drop_last = False
+        self.drop_last = True
         self.normalize = True
 
         # model configs

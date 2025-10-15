@@ -337,24 +337,38 @@ def softmax_entropy_from_logits(logits: torch.Tensor) -> torch.Tensor:
 @torch.no_grad()
 def select_eata_indices(
     logits: torch.Tensor,                   # [B, C]
-    feats: torch.Tensor,                    # [B, D]（未归一化也行）
+    feats: torch.Tensor,                    # [B, D]
     num_classes: int,
     memory: EATAMemory,
-    e_margin_scale: float = 0.85,           # 低熵阈比例 * ln(C)
-    d_margin: float = 0.0,                  # 密度阈偏移；>0 更苛刻
-    K: int = 5,                             # 密度TopK
-    temperature: float = 0.7,               # 仅用于日志/一致性
-    warmup_min: int = 128,                  # 记忆库小于该值，用“热身策略”
-    use_quantile: bool = True,              # 用分位数改良阈值
-    quantile: float = 0.70,                 # 低熵筛的分位数（70%）
-    safety_keep_frac: float = 0.125         # 防空选：保留比例
+    e_margin_scale: float = 0.85,
+    d_margin: float = 0.0,
+    K: int = 5,
+    temperature: float = 0.7,
+    warmup_min: int = 128,
+    use_quantile: bool = True,
+    quantile: float = 0.70,
+    safety_keep_frac: float = 0.125
 ):
     B = logits.size(0)
-    ent = softmax_entropy_from_logits(logits)                     # [B]
-    base = math.log(max(2, int(num_classes))) * e_margin_scale
+
+    # —— 第一轮：以“记忆库为空”为判定更稳 —— #
+    is_first_round = (len(memory) == 0)
+    keep_frac_eff = 0.95 if is_first_round else safety_keep_frac
+    n_min = max(1, int(B * keep_frac_eff))
+
+    # 熵
+    if temperature is not None and temperature != 1.0:
+        ent = softmax_entropy_from_logits(logits / temperature)  # [B]
+    else:
+        ent = softmax_entropy_from_logits(logits)
+
+    # 低熵阈
+    H = math.log(max(2, int(num_classes)))              # ln(C)
+    base = H * e_margin_scale                           # 应用比例
+    qth = float("nan")
     if use_quantile:
-        qth = torch.quantile(ent, quantile).item()
-        e_th = min(base, qth)                                     # 更宽松
+        qth = ent.quantile(quantile).item() if B > 1 else float(ent.item())
+        e_th = min(base, qth)
     else:
         e_th = base
 
@@ -362,7 +376,7 @@ def select_eata_indices(
     keep_ent = ent < e_th
     idx_ent = torch.where(keep_ent)[0]
 
-    # Step2: 密度去冗余（优先保留“新颖”的）
+    # Step2: 密度去冗余
     dens, stats, k_eff = memory.density(feats, K=K)
     if k_eff > 0:
         dens_th = (stats["med"] if not math.isnan(stats["med"]) else 0.0) - d_margin
@@ -371,23 +385,36 @@ def select_eata_indices(
     else:
         idx = idx_ent
 
-    # Step3: 热身 & 防空选
-    if len(memory) < warmup_min:
-        # 热身：先按低熵保留；若为空，再保留 top-k 自信样本
-        if idx.numel() == 0:
-            k = max(1, int(B * safety_keep_frac))
-            idx = torch.topk(-ent, k).indices
-    else:
-        if idx.numel() == 0:
-            k = max(1, int(B * safety_keep_frac))
-            idx = torch.topk(-ent, k).indices
+    # —— 安全留样：至少保留 keep_frac_eff —— #
+    if idx.numel() < n_min:
+        in_idx = torch.zeros(B, dtype=torch.bool, device=logits.device)
+        in_idx[idx] = True
+        order = torch.argsort(ent)  # 低熵优先
+        need = n_min - idx.numel()
+        extra = []
+        for j in order:
+            if not in_idx[j]:
+                extra.append(j)
+                if len(extra) == need:
+                    break
+        if extra:
+            idx = torch.cat([idx, torch.as_tensor(extra, device=idx.device)], dim=0)
 
-    # 日志字符串（外层打印）
+    # Step3: 热身 & 防空选（保持与 keep_frac_eff 一致）
+    if len(memory) < warmup_min and idx.numel() == 0:
+        k = max(1, int(B * keep_frac_eff))
+        idx = torch.topk(-ent, k).indices
+    elif idx.numel() == 0:
+        k = max(1, int(B * keep_frac_eff))
+        idx = torch.topk(-ent, k).indices
+
+    # 日志
     log = (f"[EATA] K={k_eff} dens[mean/med/p90]={stats['mean']:.3f}/"
            f"{stats['med']:.3f}/{stats['p90']:.3f}  | "
-           f"e_th={e_th:.3f} (base={base:.3f}, q{int(quantile*100)}={qth if use_quantile else float('nan'):.3f})")
+           f"e_th={e_th:.3f} (base={base:.3f}, q{int(quantile*100)}={qth:.3f})")
 
     return idx, log
+
 
 
 

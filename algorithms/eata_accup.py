@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from .base_tta_algorithm import BaseTestTimeAlgorithm  # 路径与 ACCUP 一致
 
 
+
 def _softmax_entropy_from_logits(logits: torch.Tensor) -> torch.Tensor:
     probs = logits.softmax(dim=1)
     return -(probs * (probs.clamp_min(1e-8)).log()).sum(dim=1)
@@ -116,9 +117,9 @@ class EATA(BaseTestTimeAlgorithm):
         # 3) 去冗余：与“概率均值”的余弦 < d_margin
         ids2 = torch.arange(ids1.numel(), device=ids1.device)
         if self.current_model_probs is not None and ids1.numel() > 0:
-            cos = F.cosine_similarity(self.current_model_probs.unsqueeze(0),
-                                      probs_raw[ids1], dim=1).abs()
-            ids2 = torch.where(cos < self.d_margin)[0]
+            cos = F.cosine_similarity(self._eata_probs.unsqueeze(0), probs_raw[ids1], dim=1)
+            div = (1.0 - cos).clamp(min=0.)  # 差异度，越大越“新”
+            ids2 = torch.where(div > self.d_margin)[0]
             ent_sel = ent_sel[ids2]
 
         # 4) 重加权熵最小化：coeff = exp(-(H - e_margin))

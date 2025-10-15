@@ -18,21 +18,33 @@ class ACCUP(BaseTestTimeAlgorithm):
     - 更新范围：仍由 configure_model 决定（默认 BN 仿射 + 指定 Conv1d），EATA 只筛“样本”
     """
 
+    # 放在 class ACCUP 里面
+    def _relax_if_too_few(self, h, num_selected, min_select=8):
+        if num_selected < min_select:
+            h['quantile'] = max(0.20, float(h.get('quantile', 0.50)) - 0.10)
+            h['e_margin_scale'] = max(0.25, float(h.get('e_margin_scale', 0.35)) * 0.90)
+            h['safety_keep_frac'] = min(0.60, float(h.get('safety_keep_frac', 0.40)) + 0.10)
+            h['filter_K'] = min(11, int(h.get('filter_K', 7)) + 2)
+            h['temperature'] = max(0.50, float(h.get('temperature', 0.60)) - 0.05)
+
     def __init__(self, configs, hparams, model, optimizer):
         super(ACCUP, self).__init__(configs, hparams, model, optimizer)
 
-        self.memory = EATAMemory(
-            maxlen=int(hparams.get("memory_size", 4096)),
-            device=hparams.get("device", "cpu")
-        )
+        self.hparams = hparams  # 保存一下，后面用
 
-        self.hparams.setdefault("e_margin_scale", 0.85)
-        self.hparams.setdefault("d_margin", 0.0)
-        self.hparams.setdefault("filter_K", 5)
-        self.hparams.setdefault("warmup_min", 128)
-        self.hparams.setdefault("temperature", 0.7)
-        self.hparams.setdefault("quantile", 0.70)
-        self.hparams.setdefault("safety_keep_frac", 0.125)
+        required = [
+            'memory_size', 'use_eata_select', 'use_eata_reg',
+            'filter_K', 'tau', 'temperature',
+            'e_margin_scale', 'd_margin',
+            'warmup_min', 'quantile', 'safety_keep_frac',
+        ]
+        missing = [k for k in required if k not in hparams]
+        if missing:
+            raise ValueError(f"ACCUP 缺少必要超参数: {missing}")
+
+        # —— 直接用传入的超参数 —— #
+        self.memory = EATAMemory(maxlen=int(hparams['memory_size']),
+                                 device=hparams.get('device', 'cpu'))
 
         self.use_eata_select = bool(hparams.get("use_eata_select", True))  # 是否启用“低熵+去冗余”筛样本
         self.use_eata_reg    = bool(hparams.get("use_eata_reg", True))     # 是否启用 Fisher/L2-SP 正则
@@ -115,25 +127,31 @@ class ACCUP(BaseTestTimeAlgorithm):
         self._eata_snapshot_if_needed(model)
 
         # 用记忆库做“低熵 + 去冗余”筛选（基于 raw 视图的 logits/feats）
+        hp = self.hparams  # 简写
+
         sel, log_str = select_eata_indices(
             logits=r_output.detach(),
             feats=r_feat.detach(),
             num_classes=self.num_classes,
             memory=self.memory,
-            e_margin_scale=float(self.hparams.get("e_margin_scale", 0.85)),
-            d_margin=float(self.hparams.get("d_margin", 0.0)),
-            K=int(self.hparams.get("filter_K", self.filter_K)),
-            temperature=float(self.hparams.get("temperature", self.temperature)),
-            warmup_min=int(self.hparams.get("warmup_min", 128)),
-            use_quantile=True,
-            quantile=float(self.hparams.get("quantile", 0.70)),
-            safety_keep_frac=float(self.hparams.get("safety_keep_frac", 0.125)),
+
+            # 这里不再给第二个默认参数，缺了就直接抛错，保证一定用到外部传的值
+            e_margin_scale=float(hp['e_margin_scale']),
+            d_margin=float(hp['d_margin']),
+            K=int(hp['filter_K']),
+            temperature=float(hp['temperature']),
+            warmup_min=int(hp['warmup_min']),
+            use_quantile=bool(hp['use_quantile']),
+            quantile=float(hp['quantile']),
+            safety_keep_frac=float(hp['safety_keep_frac']),
         )
 
         print(f"[EATA] select={self.use_eata_select}, reg={self.use_eata_reg}")
         if self.use_eata_select:
             print(f"[EATA] selected {int(sel.numel())}/{r_output.size(0)}")
             print(log_str)
+
+
         else:
             sel = torch.arange(r_output.size(0), device=r_output.device)
             print("[EATA] using full batch (no selection)")
@@ -177,6 +195,10 @@ class ACCUP(BaseTestTimeAlgorithm):
                 feats=r_feat.detach(),
                 probs=torch.softmax(r_output.detach(), dim=1),
             )
+
+        print('[HPARAMS used]', {k: self.hparams[k] for k in [
+            'e_margin_scale', 'd_margin', 'filter_K', 'temperature',
+            'warmup_min', 'use_quantile', 'quantile', 'safety_keep_frac']})
 
         # 返回与原 ACCUP 保持一致（给上层 metrics 用）
         return select_pred
