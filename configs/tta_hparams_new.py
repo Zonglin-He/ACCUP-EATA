@@ -10,35 +10,40 @@ class FD():
         super(FD, self).__init__()
         self.train_params = {
             'num_epochs': 40,
-            'batch_size': 32,
+            'batch_size': 128,
             'weight_decay': 1e-4,
-            'step_size': 50,
+            'step_size': 30,
             'lr_decay': 0.5,
             'steps': 1,
             'optim_method': 'adam',
-            'momentum': 0.9
+            'momentum': 0.9,
+            'grad_clip': 0.5,
+            'grad_clip_value': None
         }
         self.alg_hparams = {
             'ACCUP': {
-                'pre_learning_rate': 0.001,
-                'learning_rate': 3e-4,
-                'filter_K': 10,
-                'tau': 20,
-                'temperature': 0.7,
+                'pre_learning_rate': 3e-4,
+                'learning_rate': 1e-4,
+                'filter_K': 21,
+                'tau': 12,
+                'temperature': 0.60,
+                'warmup_min': 128,
+                'quantile': 0.80,
+                'safety_keep_frac': 0.125,
 
-                # EATA 相关
+                # EATA
                 'use_eata_select': True,
                 'use_eata_reg': True,
-                # e_margin = ln(num_classes) * e_margin_scale
-                'e_margin_scale': 0.55,   # 建议先试 0.45（更严格）或 0.35（更宽松）
-                'd_margin': 0.04,         # 密度阈值，0.03~0.08 之间试两档
-                'lambda_eata': 1.0,# 正则强度，0.5~1.5 之间可扫两档
-                'e_margin_scale': 0.55,
-                'd_margin': 0.04,
+                'e_margin_scale': 0.40,
+                'd_margin': 0.02,
+                'lambda_eata': 1.4,
                 'memory_size': 4096,
+                'use_quantile': True,
 
+                'grad_clip': 0.5,
+                'grad_clip_value': None
             },
-            'NoAdap': {'pre_learning_rate': 0.001}
+            'NoAdap': {'pre_learning_rate': 5e-4}
         }
 
 class EEG():
@@ -58,22 +63,22 @@ class EEG():
         }
         self.alg_hparams = {
             'ACCUP': {
-                'pre_learning_rate': 5e-4,   # ↓ 预训练更稳，避免过拟合导致适配不稳
-                'learning_rate': 3e-4,       # ↓ TTA 时更小 LR，减少负迁移
-                'filter_K': 25,              # ↑ 密度估计更可靠（原 15）
+                'pre_learning_rate': 5e-4,
+                'learning_rate': 3e-4,
+                'filter_K': 25,
                 'tau': 10,
-                'temperature': 0.70,         # ↓ 略增置信度分离度，利于选样
-                'warmup_min': 48,            # ↑ 热身更长，先累计安全样本再适配
-                'quantile': 0.75,            # ↑ 选择更“靠前”的高置信度样本
-                'safety_keep_frac': 0.30,    # ↓ 更果断剔除不确定样本
+                'temperature': 0.70,
+                'warmup_min': 48,
+                'quantile': 0.75,
+                'safety_keep_frac': 0.30,
 
                 # EATA
                 'use_eata_select': True,
                 'use_eata_reg': True,
-                'e_margin_scale': 0.45,      # ↑ 从 0.32 → 0.40：更严格的熵边界
-                'd_margin': 0.06,            # ↑ 从 0.05 → 0.06：提高密度阈值
-                'lambda_eata': 1.4,          # ↓ 从 1.4 → 1.0：避免过强正则压制更新
-                'memory_size': 2048,         # ↑ 记忆更长一点，统计更稳
+                'e_margin_scale': 0.45,
+                'd_margin': 0.06,
+                'lambda_eata': 1.4,
+                'memory_size': 2048,
                 'use_quantile': True,
 
                 'grad_clip': 0.5,

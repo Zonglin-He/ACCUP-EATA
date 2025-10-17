@@ -334,12 +334,16 @@ def softmax_entropy_from_logits(logits: torch.Tensor) -> torch.Tensor:
     return -(probs * (probs.clamp_min(1e-8)).log()).sum(dim=1)
 
 
+import math
+import torch
+
 @torch.no_grad()
 def select_eata_indices(
     logits: torch.Tensor,                   # [B, C]
     feats: torch.Tensor,                    # [B, D]
     num_classes: int,
-    memory: EATAMemory,
+    memory,                                  # EATAMemory，需提供 .density(feats, K)
+    # —— 原有超参 —— #
     e_margin_scale: float = 0.85,
     d_margin: float = 0.0,
     K: int = 5,
@@ -347,71 +351,177 @@ def select_eata_indices(
     warmup_min: int = 128,
     use_quantile: bool = True,
     quantile: float = 0.70,
-    safety_keep_frac: float = 0.125
+    safety_keep_frac: float = 0.125,
+    # —— 新增更稳控制项 —— #
+    e_margin_min: float = 0.25,            # 熵阈的“地板”（避免被分位数拉得太低）
+    balance_per_class: bool = True,        # 是否做类均衡选样
+    min_per_class: int = 2,                # 每类保底样本
+    fuse_density: bool = True,             # 是否与密度融合排序
+    density_high_is_good: bool = False     # dens 越小越近(=距离)；若是“相似度”，设为 True
 ):
-    B = logits.size(0)
+    """
+    返回:
+        idx: 选中样本下标 [<=B]
+        log: 文本日志
+    依赖:
+        - softmax_entropy_from_logits(logits)
+        - memory.density(feats, K) -> (dens[B], stats{mean/med/p90}, k_eff)
+    """
 
-    # —— 第一轮：以“记忆库为空”为判定更稳 —— #
+    device = logits.device
+    B = int(logits.size(0))
+    C = int(num_classes)
+
+    # ---------- 小工具：安全 z-score ----------
+    def _zsafe(x: torch.Tensor) -> torch.Tensor:
+        # 避免 numel<2 时产生 dof 警告
+        if x.numel() < 2:
+            return torch.zeros_like(x)
+        return (x - x.mean()) / (x.std(correction=0) + 1e-6)
+
+    # ---------- 首轮/暖启动 ----------
     is_first_round = (len(memory) == 0)
-    keep_frac_eff = 0.95 if is_first_round else safety_keep_frac
+    in_warmup = (len(memory) < warmup_min)
+    # 首轮更保守，不要一下子强回填太多
+    keep_frac_eff = min(safety_keep_frac, 0.10) if is_first_round else safety_keep_frac
     n_min = max(1, int(B * keep_frac_eff))
 
-    # 熵
+    # ---------- 熵（温度缩放可选） ----------
     if temperature is not None and temperature != 1.0:
         ent = softmax_entropy_from_logits(logits / temperature)  # [B]
     else:
         ent = softmax_entropy_from_logits(logits)
 
-    # 低熵阈
-    H = math.log(max(2, int(num_classes)))              # ln(C)
-    base = H * e_margin_scale                           # 应用比例
-    qth = float("nan")
-    if use_quantile:
-        qth = ent.quantile(quantile).item() if B > 1 else float(ent.item())
+    # ---------- 低熵阈值（先上界，再地板） ----------
+    H = math.log(max(2, C))                # ln(C)
+    base = H * e_margin_scale              # 上界
+    if use_quantile and B > 1:
+        qth = ent.quantile(quantile).item()
         e_th = min(base, qth)
     else:
+        qth = float("nan")
         e_th = base
+    e_th = max(e_th, e_margin_min)         # 关键：不让阈值掉穿地板
 
-    # Step1: 低熵样本
-    keep_ent = ent < e_th
-    idx_ent = torch.where(keep_ent)[0]
+    # Step 1: 低熵候选
+    cand = torch.where(ent < e_th)[0]
 
-    # Step2: 密度去冗余
+    # ---------- 密度过滤（去冗余/取“更近”） ----------
     dens, stats, k_eff = memory.density(feats, K=K)
-    if k_eff > 0:
-        dens_th = (stats["med"] if not math.isnan(stats["med"]) else 0.0) - d_margin
-        keep_dens = torch.isnan(dens) | (dens < dens_th)
-        idx = torch.where(keep_ent & keep_dens)[0]
+    if k_eff > 0 and cand.numel() > 0:
+        dens_c = dens[cand]
+        # 用候选的中位数更稳；退化到全局统计
+        if torch.isfinite(dens_c).any():
+            med = torch.nanmedian(dens_c).item()
+        else:
+            med = float(stats.get("med", float("nan")))
+        if math.isnan(med):
+            med = float(stats.get("mean", 0.0))
+
+        if not density_high_is_good:
+            # dens 是距离：越小越近，保留 <= (med - d_margin)
+            keep = (torch.isnan(dens_c) | (dens_c <= (med - d_margin)))
+        else:
+            # dens 是相似度：越大越近，保留 >= (med + d_margin)
+            keep = (torch.isnan(dens_c) | (dens_c >= (med + d_margin)))
+        cand = cand[keep]
+
+    # ---------- 全局预算（随 quantile 自动缩放） ----------
+    # 大致是 (1 - quantile) * B；暖启动/首轮更保守
+    budget = max(1, int(B * (1.0 - quantile)))
+    if is_first_round or (k_eff == 0) or in_warmup:
+        budget = max(C * max(1, min_per_class), budget // 2)
+
+    # cand 为空则用低熵 top-k 兜底，但不超过预算和 n_min
+    if cand.numel() == 0:
+        k = max(1, min(budget, n_min))
+        cand = torch.topk(-ent, k).indices
+
+    # ---------- 类均衡选样 + 融合排序 ----------
+    if balance_per_class:
+        pred = logits.argmax(dim=1)
+        selected = []
+
+        # 每类先取保底
+        per_take = max(1, min_per_class)
+        for c in range(C):
+            idx_c = cand[pred[cand] == c]
+            if idx_c.numel() == 0:
+                continue
+
+            if fuse_density and (k_eff > 0):
+                d = dens[idx_c]
+                s_ent = -ent[idx_c]                              # 低熵更好
+                s_den = (-d if not density_high_is_good else d)  # 更近更好
+                score = _zsafe(s_ent) + _zsafe(s_den)
+                order = torch.argsort(-score)
+            else:
+                order = torch.argsort(ent[idx_c])                # 仅按熵（升序）
+
+            take = min(per_take, idx_c.numel())
+            selected.append(idx_c[order[:take]])
+
+        if len(selected) > 0:
+            selected = torch.cat(selected, dim=0)
+        else:
+            selected = cand[:0]  # 空张量
+
+        # 还没到预算则做全局补齐
+        if selected.numel() < budget:
+            # 用 “B维布尔表” 排除已选，效率高且不依赖 CPU set()
+            already = torch.zeros(B, dtype=torch.bool, device=device)
+            if selected.numel() > 0:
+                already[selected] = True
+            remain = cand[~already[cand]]
+
+            if remain.numel() > 0:
+                if fuse_density and (k_eff > 0):
+                    d = dens[remain]
+                    s_ent = -ent[remain]
+                    s_den = (-d if not density_high_is_good else d)
+                    score = _zsafe(s_ent) + _zsafe(s_den)
+                    order = torch.argsort(-score)
+                else:
+                    order = torch.argsort(ent[remain])
+
+                need = min(budget - selected.numel(), remain.numel())
+                selected = torch.cat([selected, remain[order[:need]]], dim=0)
+
+        idx = selected[:budget]
+
     else:
-        idx = idx_ent
+        # 不做类均衡：按融合分数/熵直接截取到 budget
+        if cand.numel() > budget:
+            if fuse_density and (k_eff > 0):
+                d = dens[cand]
+                s_ent = -ent[cand]
+                s_den = (-d if not density_high_is_good else d)
+                score = _zsafe(s_ent) + _zsafe(s_den)
+                order = torch.argsort(-score)
+            else:
+                order = torch.argsort(ent[cand])
+            idx = cand[order[:budget]]
+        else:
+            idx = cand
 
-    # —— 安全留样：至少保留 keep_frac_eff —— #
+    # ---------- 少样本兜底（不超过预算） ----------
     if idx.numel() < n_min:
-        in_idx = torch.zeros(B, dtype=torch.bool, device=logits.device)
-        in_idx[idx] = True
-        order = torch.argsort(ent)  # 低熵优先
-        need = n_min - idx.numel()
-        extra = []
-        for j in order:
-            if not in_idx[j]:
-                extra.append(j)
-                if len(extra) == need:
-                    break
-        if extra:
-            idx = torch.cat([idx, torch.as_tensor(extra, device=idx.device)], dim=0)
+        need = min(B, n_min)
+        extra = torch.topk(-ent, k=need).indices
+        merged = torch.unique(torch.cat([idx, extra], dim=0))
+        if merged.numel() > budget:
+            merged = merged[:budget]
+        idx = merged
 
-    # Step3: 热身 & 防空选（保持与 keep_frac_eff 一致）
-    if len(memory) < warmup_min and idx.numel() == 0:
-        k = max(1, int(B * keep_frac_eff))
-        idx = torch.topk(-ent, k).indices
-    elif idx.numel() == 0:
-        k = max(1, int(B * keep_frac_eff))
-        idx = torch.topk(-ent, k).indices
-
-    # 日志
-    log = (f"[EATA] K={k_eff} dens[mean/med/p90]={stats['mean']:.3f}/"
-           f"{stats['med']:.3f}/{stats['p90']:.3f}  | "
-           f"e_th={e_th:.3f} (base={base:.3f}, q{int(quantile*100)}={qth:.3f})")
+    # ---------- 日志 ----------
+    mean_ = float(stats.get('mean', float('nan'))) if isinstance(stats, dict) else float('nan')
+    med_  = float(stats.get('med',  float('nan'))) if isinstance(stats, dict) else float('nan')
+    p90_  = float(stats.get('p90',  float('nan'))) if isinstance(stats, dict) else float('nan')
+    log = (
+        f"[EATA] selected {int(idx.numel())}/{B} | "
+        f"K={int(k_eff)} dens[mean/med/p90]={mean_:.3f}/{med_:.3f}/{p90_:.3f} | "
+        f"e_th={e_th:.3f} (base={base:.3f}, q{int(quantile*100)}={qth:.3f})"
+    )
 
     return idx, log
 
@@ -424,7 +534,7 @@ def select_eata_indices(
 
 # 2) 每个 test batch 内，在拿到 logits、feats 后调用：
 #   idx = select_eata_indices(
-#       logits=logits, feats=feats,
+#       logits=logits, feats=feats
 #       num_classes=self.num_classes,
 #       e_margin_scale=self.hparams.get('e_margin_scale', 0.55),
 #       d_margin=self.hparams.get('d_margin', 0.04),
