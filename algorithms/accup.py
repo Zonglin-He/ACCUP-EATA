@@ -13,12 +13,10 @@ from utils.utils import EATAMemory, select_eata_indices, softmax_entropy_from_lo
 class ACCUP(BaseTestTimeAlgorithm):
     """
     ACCUP + EATA: 在 ACCUP 原流程中缝入 EATA 的“先选后学 + 防遗忘”。
-    - 保留：双视图（raw/aug）、原型选择、原型/模型熵比较、对比损失、返回 select_pred（兼容你原 calculate_metrics）
-    - 新增：EATA 低熵筛选 + 概率均值去冗余（批内子集） + 熵最小化项 + Fisher/L2-SP
-    - 更新范围：仍由 configure_model 决定（默认 BN 仿射 + 指定 Conv1d），EATA 只筛“样本”
+    - 保留：双视图（raw/aug）、原型选择、原型/模型熵比较、对比损失、返回 select_pred（兼容 calculate_metrics）
+    - 新增：EATA 低熵筛选 + 概率均值去冗余 + 熵最小化项 + Fisher/L2-SP
     """
 
-    # 放在 class ACCUP 里面
     def _relax_if_too_few(self, h, num_selected, min_select=8):
         if num_selected < min_select:
             h['quantile'] = max(0.20, float(h.get('quantile', 0.50)) - 0.10)
@@ -31,32 +29,26 @@ class ACCUP(BaseTestTimeAlgorithm):
         super(ACCUP, self).__init__(configs, hparams, model, optimizer)
 
         self.hparams = hparams  # 保存一下，后面用
+        self.num_classes = configs.num_classes
 
         required = [
             'memory_size', 'use_eata_select', 'use_eata_reg',
             'filter_K', 'tau', 'temperature',
             'e_margin_scale', 'd_margin',
-            'warmup_min', 'quantile', 'safety_keep_frac',
+            'warmup_min', 'use_quantile', 'quantile', 'safety_keep_frac',
         ]
         missing = [k for k in required if k not in hparams]
         if missing:
             raise ValueError(f"ACCUP 缺少必要超参数: {missing}")
 
-        # —— 直接用传入的超参数 —— #
-        self.memory = EATAMemory(maxlen=int(hparams['memory_size']),
-                                 device=hparams.get('device', 'cpu'))
-
-        self.use_eata_select = bool(hparams.get("use_eata_select", True))  # 是否启用“低熵+去冗余”筛样本
-        self.use_eata_reg    = bool(hparams.get("use_eata_reg", True))     # 是否启用 Fisher/L2-SP 正则
-
-        # ---- 原 ACCUP 成员 ----
+        # ---- 模型子模块 ----
         self.featurizer = model.feature_extractor
         self.classifier = model.classifier
-        self.filter_K = hparams['filter_K']
-        self.tau = hparams['tau']
-        self.temperature = hparams['temperature']
-        self.num_classes = configs.num_classes
+        self.filter_K = int(hparams['filter_K'])
+        self.tau = float(hparams['tau'])
+        self.temperature = float(hparams['temperature'])
 
+        # ---- 用分类器权重做 warmup supports ----
         warmup_supports = self.classifier.logits.weight.data.detach()
         self.warmup_supports = warmup_supports
         warmup_prob = self.classifier(self.warmup_supports)
@@ -70,37 +62,46 @@ class ACCUP(BaseTestTimeAlgorithm):
         self.cls_scores = self.warmup_cls_scores.data
 
         # ---- EATA 状态与超参（可在 hparams 覆盖）----
-        self.e_margin = float(hparams.get("e_margin", math.log(self.num_classes) * 0.40))  # 低熵阈
-        self.d_margin = float(hparams.get("d_margin", 0.05))                               # 去冗余阈
-        self.fisher_alpha = float(hparams.get("fisher_alpha", 2000.0))                     # Fisher 权重
-        self.lambda_eata = float(hparams.get("lambda_eata", 1.0))                          # 熵项系数
-
-        self._eata_trainable_names = None  # 可训练参数名集合
+        self.use_eata_select = bool(hparams.get("use_eata_select", True))
+        self.use_eata_reg    = bool(hparams.get("use_eata_reg", True))
+        self.e_margin = float(hparams.get("e_margin", math.log(self.num_classes) * 0.40))
+        self.d_margin = float(hparams.get("d_margin", 0.05))
+        self.fisher_alpha = float(hparams.get("fisher_alpha", 2000.0))
+        self.lambda_eata = float(hparams.get("lambda_eata", 1.0))
+        self._eata_trainable_names = None
+        self._eata_theta0 = None
 
         # Fisher 可直接给 dict 或路径；没有则回退 L2-SP
         self.fishers = hparams.get("fisher_state", None)
         if self.fishers is None and "fisher_path" in hparams and os.path.exists(hparams["fisher_path"]):
             self.fishers = torch.load(hparams["fisher_path"], map_location="cpu")
 
-    # ----------------- ACCUP 原逻辑 -----------------
+        # ---- EATAMemory 与设备 ----
+        dev = next(model.parameters()).device
+        self.device = dev
+        self.hparams['device'] = str(dev)
+        self.memory = EATAMemory(maxlen=int(hparams['memory_size']), device=dev)
+
     @torch.enable_grad()
     def forward_and_adapt(self, batch_data, model, optimizer):
-        raw_data, aug_data = batch_data[0], batch_data[1]
+        # === 读入两视图，并放到与模型相同的设备 ===
+        device = next(model.parameters()).device
+        raw_data, aug_data = batch_data[0].to(device), batch_data[1].to(device)
 
-        # 前向两视图
+        # === 双视图前向 ===
         r_feat, r_seq_feat = model.feature_extractor(raw_data)
         r_output = model.classifier(r_feat)
         a_feat, a_seq_feat = model.feature_extractor(aug_data)
         a_output = model.classifier(a_feat)
 
-        # 集成特征/预测
+        # === 集成特征/预测 ===
         z = (r_feat + a_feat) / 2.0
         p = (r_output + a_output) / 2.0
         yhat = F.one_hot(p.argmax(1), num_classes=self.num_classes).float()
         ent = softmax_entropy(p, p)
         cls_scores = F.softmax(p, 1)
 
-        # 记忆库追加（不反传）
+        # === 缓存（保持与当前 device 一致） ===
         with torch.no_grad():
             self.supports = self.supports.to(z.device)
             self.labels = self.labels.to(z.device)
@@ -111,31 +112,29 @@ class ACCUP(BaseTestTimeAlgorithm):
             self.ents = torch.cat([self.ents, ent])
             self.cls_scores = torch.cat([self.cls_scores, cls_scores])
 
-        # 选最自信 supports
+        # === 选最自信 supports（修复索引的设备一致性） ===
         supports, labels, _ = self.select_supports()
 
-        # 原型头 logits + 熵比较（保留你原来的选择语义）
+        # === 原型头 logits + 熵比较，得到最终 select_pred ===
         prt_scores = self.compute_logits(z, supports, labels)
         prt_ent = softmax_entropy(prt_scores, prt_scores)
         idx = prt_ent < ent
         idx_un = idx.unsqueeze(1).expand(-1, prt_scores.shape[1])
-        select_pred = torch.where(idx_un, prt_scores, cls_scores)  # 返回用
+        select_pred = torch.where(idx_un, prt_scores, cls_scores)
 
-        # ----------------- 这里开始缝入 EATA 的“先选后学 + 正则” -----------------
-        # 懒加载 θ0（用于 L2-SP）
-        # 懒加载 θ0（用于 L2-SP）
+        # === 懒加载 θ0（用于 L2-SP） ===
         self._eata_snapshot_if_needed(model)
 
-        # 用记忆库做“低熵 + 去冗余”筛选（基于 raw 视图的 logits/feats）
-        hp = self.hparams  # 简写
+        # === 调用 EATA 选择：先确保 memory 与当前 batch 同设备 ===
+        if getattr(self.memory, "device", None) != r_feat.device:
+            self.memory.to(r_feat.device)
 
+        hp = self.hparams
         sel, log_str = select_eata_indices(
             logits=r_output.detach(),
             feats=r_feat.detach(),
             num_classes=self.num_classes,
             memory=self.memory,
-
-            # 这里不再给第二个默认参数，缺了就直接抛错，保证一定用到外部传的值
             e_margin_scale=float(hp['e_margin_scale']),
             d_margin=float(hp['d_margin']),
             K=int(hp['filter_K']),
@@ -145,41 +144,43 @@ class ACCUP(BaseTestTimeAlgorithm):
             quantile=float(hp['quantile']),
             safety_keep_frac=float(hp['safety_keep_frac']),
         )
+        # 统一设备与 dtype
+        sel = sel.to(r_output.device, dtype=torch.long)
 
         print(f"[EATA] select={self.use_eata_select}, reg={self.use_eata_reg}")
         if self.use_eata_select:
             print(f"[EATA] selected {int(sel.numel())}/{r_output.size(0)}")
             print(log_str)
-
-
         else:
             sel = torch.arange(r_output.size(0), device=r_output.device)
             print("[EATA] using full batch (no selection)")
+
         ent_raw = softmax_entropy_from_logits(r_output).detach()
 
-        # 仅对“被选中样本”的三视图做对比损失 + EATA 熵项 + Fisher/L2-SP 正则
+        # === 仅对“被选中样本”的三视图做对比损失 + EATA 熵项 + 防遗忘 ===
         loss = torch.zeros([], device=z.device)
         if sel.numel() > 0:
             B = r_output.size(0)
-            cat_p = torch.cat([r_output, a_output, p], dim=0)      # [3B, C]
-            cat_y = select_pred.max(1)[1].repeat(3)                # [3B]（用你最终选择后的伪标签）
-            sel3 = torch.cat([sel, sel + B, sel + 2 * B], dim=0)   # 三视图中的选中索引
+            cat_p = torch.cat([r_output, a_output, p], dim=0)       # [3B, C]
+            cat_y = select_pred.max(1)[1].repeat(3)                 # [3B]
+            sel3 = torch.cat([sel, sel + B, sel + 2 * B], dim=0)    # 三视图索引
 
             # 对比损失（仅选中子集）
-            loss_con = domain_contrastive_loss(cat_p[sel3], cat_y[sel3],
-                                               temperature=self.temperature, device=z.device)
+            loss_con = domain_contrastive_loss(
+                cat_p[sel3], cat_y[sel3],
+                temperature=self.temperature, device=z.device
+            )
 
             # EATA 熵项（增广视图更稳）+ 样本重加权 coeff = exp(-(H - e_margin))
             coeff = torch.exp(-(ent_raw[sel].detach() - self.e_margin))
             loss_e = (softmax_entropy_from_logits(a_output[sel]) * coeff).mean()
 
-            # 防遗忘
-            # 防遗忘
+            # 防遗忘（Fisher 优先，L2-SP 兜底）
             loss_reg = self._eata_regularizer(model) if self.use_eata_reg else torch.zeros([], device=z.device)
 
             loss = loss_con + self.lambda_eata * loss_e + loss_reg
 
-        # 只有有选中样本时才更新；否则跳过更新（与 EATA 一致）
+        # === 更新 ===
         optimizer.zero_grad(set_to_none=True)
         if sel.numel() > 0:
             loss.backward()
@@ -189,7 +190,7 @@ class ACCUP(BaseTestTimeAlgorithm):
             )
             optimizer.step()
 
-        # 更新概率均值缓存（做去冗余）
+        # === 更新 EATAMemory 概率均值缓存（去冗余用） ===
         with torch.no_grad():
             self.memory.push(
                 feats=r_feat.detach(),
@@ -203,7 +204,7 @@ class ACCUP(BaseTestTimeAlgorithm):
         # 返回与原 ACCUP 保持一致（给上层 metrics 用）
         return select_pred
 
-    # ----------------- ACCUP 原工具 -----------------
+    # ----------------- ACCUP 工具 -----------------
     def get_topk_neighbor(self, feature, supports, cls_scores, k_neighbor):
         feature = F.normalize(feature, dim=1)
         supports = F.normalize(supports, dim=1)
@@ -223,30 +224,45 @@ class ACCUP(BaseTestTimeAlgorithm):
         return logits
 
     def select_supports(self):
+        """修复：索引张量与被索引张量保持同一设备、long dtype；类内按熵升序取 K 个。"""
         ent_s = self.ents
         y_hat = self.labels.argmax(dim=1).long()
-        filter_K = self.filter_K
-        if filter_K == -1:
-            indices = torch.LongTensor(list(range(len(ent_s))))
-        else:
-            indices = []
-            indices1 = torch.LongTensor(list(range(len(ent_s))))
-            for i in range(self.num_classes):
-                _, indices2 = torch.sort(ent_s[y_hat == i])
-                indices.append(indices1[y_hat == i][indices2][:filter_K])
-            indices = torch.cat(indices)
+        filter_K = int(self.filter_K)
+        mask_device = y_hat.device
+        N = ent_s.shape[0]
 
-        self.supports = self.supports[indices]
-        self.labels = self.labels[indices]
-        self.ents = self.ents[indices]
-        self.cls_scores = self.cls_scores[indices]
+        if filter_K == -1:
+            indices = torch.arange(N, device=mask_device, dtype=torch.long)
+        else:
+            indices_list = []
+            indices1 = torch.arange(N, device=mask_device, dtype=torch.long)
+            for i in range(self.num_classes):
+                cls_mask = (y_hat == i)
+                if cls_mask.any():
+                    _, indices2 = torch.sort(ent_s[cls_mask], dim=0)  # 同设备
+                    sel = indices1[cls_mask][indices2][:filter_K]
+                    if sel.numel() > 0:
+                        indices_list.append(sel)
+            if len(indices_list) > 0:
+                indices = torch.cat(indices_list, dim=0)
+            else:
+                indices = torch.empty(0, dtype=torch.long, device=mask_device)
+
+        # 与被索引张量设备一致
+        idx_dev = self.supports.device
+        indices = indices.to(idx_dev)
+
+        self.supports   = torch.index_select(self.supports,   0, indices)
+        self.labels     = torch.index_select(self.labels,     0, indices)
+        self.ents       = torch.index_select(self.ents,       0, indices)
+        self.cls_scores = torch.index_select(self.cls_scores, 0, indices)
         return self.supports, self.labels, indices
 
     def configure_model(self, model):
         """
         与原 ACCUP 一致：训练模式；冻结全网；
         BN 用 batch 统计并允许仿射更新；Conv1d 的三个 block 打开训练。
-        （EATA 的正则会只针对 requires_grad=True 的这些参数）
+        （EATA 的正则只作用于 requires_grad=True 的参数）
         """
         model.train()
         model.requires_grad_(False)
@@ -267,27 +283,10 @@ class ACCUP(BaseTestTimeAlgorithm):
         return model
 
     # ----------------- EATA 小工具 -----------------
-    @staticmethod
-    def _softmax_entropy_from_logits(logits: torch.Tensor) -> torch.Tensor:
-        probs = torch.softmax(logits, dim=1)
-        return -(probs * (probs.clamp_min(1e-8)).log()).sum(dim=1)
-
-    @staticmethod
-    def _update_probs_momentum(current, new_probs, m=0.9):
-        if new_probs.numel() == 0:
-            return current
-        mean_new = new_probs.mean(dim=0)
-        if current is None:
-            return mean_new
-        return m * current + (1.0 - m) * mean_new
-
     def _eata_snapshot_if_needed(self, model):
         """第一次调用时，记录可训练子集的 θ0（用于 L2-SP）。"""
-        # 用 getattr 防止 AttributeError
-        theta0 = getattr(self, "_eata_theta0", None)
-        if theta0 is None:
+        if self._eata_theta0 is None:
             self._eata_trainable_names = [n for n, p in model.named_parameters() if p.requires_grad]
-            # 记录可训练参数的初始快照
             self._eata_theta0 = {
                 n: p.detach().clone()
                 for n, p in model.named_parameters()
@@ -298,7 +297,7 @@ class ACCUP(BaseTestTimeAlgorithm):
         """Fisher（优先）或 L2-SP（兜底），只作用于 requires_grad=True 的参数。"""
         device = next(model.parameters()).device
         reg = None
-        theta0 = getattr(self, "_eata_theta0", None)
+        theta0 = self._eata_theta0
 
         # Fisher 优先
         if isinstance(self.fishers, dict) and len(self.fishers) > 0:
@@ -325,4 +324,3 @@ class ACCUP(BaseTestTimeAlgorithm):
                 term = ((p - theta0[n].to(device)) ** 2).sum()
                 reg = term if reg is None else (reg + term)
         return reg if reg is not None else torch.zeros([], device=device)
-

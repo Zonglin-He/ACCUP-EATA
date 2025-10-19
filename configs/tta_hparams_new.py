@@ -28,8 +28,8 @@ class FD():
                 'tau': 12,
                 'temperature': 0.60,
                 'warmup_min': 128,
-                'quantile': 0.80,
-                'safety_keep_frac': 0.125,
+                'quantile': 0.85,
+                'safety_keep_frac': 0.08,
 
                 # EATA
                 'use_eata_select': True,
