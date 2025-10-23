@@ -220,24 +220,28 @@ class ACCUP(BaseTestTimeAlgorithm):
         return logits
 
     def select_supports(self):
-        desired_device = self.supports.device
-        ents_device = self.ents.device
-        if desired_device.type == "cpu" and ents_device.type != "cpu":
-            desired_device = ents_device
+        supports = self.supports
+        labels = self.labels
+        ents = self.ents
+        cls_scores = self.cls_scores
 
-        if self.supports.device != desired_device:
-            self.supports = self.supports.to(desired_device)
-        if self.labels.device != desired_device:
-            self.labels = self.labels.to(desired_device)
-        if self.cls_scores.device != desired_device:
-            self.cls_scores = self.cls_scores.to(desired_device)
-        if self.ents.device != desired_device:
-            self.ents = self.ents.to(desired_device)
+        # Choose a common working device (prefer GPUs when any tensor already lives there)
+        working_device = supports.device
+        for tensor in (ents, labels, cls_scores):
+            if tensor.device.type != working_device.type:
+                if working_device.type == "cpu":
+                    working_device = tensor.device
+                break
 
-        ent_s = self.ents
-        y_hat = self.labels.argmax(dim=1).long()
+        supports = supports.to(working_device)
+        labels = labels.to(working_device)
+        ents = ents.to(working_device)
+        cls_scores = cls_scores.to(working_device)
+
+        ent_s = ents
+        y_hat = labels.argmax(dim=1).long()
         filter_K = self.filter_K
-        device = self.supports.device
+        device = supports.device
         if filter_K == -1:
             indices = torch.arange(len(ent_s), device=device, dtype=torch.long)
         else:
@@ -251,21 +255,16 @@ class ACCUP(BaseTestTimeAlgorithm):
             warm_idx = torch.arange(self._warmup_count, device=indices.device)
             indices = torch.unique(torch.cat([warm_idx, indices]))
 
-        # Final guard: align buffers with the index device before advanced indexing
-        target_device = indices.device
-        if self.supports.device != target_device:
-            self.supports = self.supports.to(target_device)
-        if self.labels.device != target_device:
-            self.labels = self.labels.to(target_device)
-        if self.ents.device != target_device:
-            self.ents = self.ents.to(target_device)
-        if self.cls_scores.device != target_device:
-            self.cls_scores = self.cls_scores.to(target_device)
+        # Apply indices on the aligned local tensors, then update cached tensors
+        supports = supports[indices]
+        labels = labels[indices]
+        ents = ents[indices]
+        cls_scores = cls_scores[indices]
 
-        self.supports = self.supports[indices]
-        self.labels = self.labels[indices]
-        self.ents = self.ents[indices]
-        self.cls_scores = self.cls_scores[indices]
+        self.supports = supports
+        self.labels = labels
+        self.ents = ents
+        self.cls_scores = cls_scores
         return self.supports, self.labels, indices
 
     def configure_model(self, model):
