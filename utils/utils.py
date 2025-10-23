@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn as nn
 
+import pickle
 import random
 import os
 import sys
@@ -16,17 +17,22 @@ from skorch import NeuralNetClassifier  # for DIV Risk
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
 
+try:
+    import torch.serialization as _torch_serialization
+
+    _torch_serialization.add_safe_globals([
+        np.core.multiarray._reconstruct,
+        np.ndarray,
+    ])
+except Exception:
+    pass
+
 
 def safe_torch_load(*args, **kwargs):
-    """Load torch objects allowing numpy structures when PyTorch defaults to weights-only mode."""
-    kwargs.setdefault("weights_only", False)
-    try:
-        return torch.load(*args, **kwargs)
-    except TypeError as exc:
-        if "unexpected keyword argument 'weights_only'" in str(exc):
-            kwargs.pop("weights_only", None)
-            return torch.load(*args, **kwargs)
-        raise
+    """Compat loader that avoids PyTorch 2.6 weights_only issues and supports legacy pickled numpy objects."""
+    kwargs["weights_only"] = False
+    kwargs.setdefault("pickle_module", pickle)
+    return torch.load(*args, **kwargs)
 
 
 class AverageMeter(object): #计算并存储平均值和当前值
