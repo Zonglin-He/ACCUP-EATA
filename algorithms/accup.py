@@ -48,6 +48,9 @@ class ACCUP(BaseTestTimeAlgorithm):
 
         self.use_eata_select = bool(hparams.get("use_eata_select", True))  # 是否启用“低熵+去冗余”筛样本
         self.use_eata_reg    = bool(hparams.get("use_eata_reg", True))     # 是否启用 Fisher/L2-SP 正则
+        self.online_fisher   = bool(hparams.get('online_fisher', True))    # enable Fisher regularization online during TTA
+        self.include_warmup_support = bool(hparams.get('include_warmup_support', True))
+        self.max_fisher_updates = int(hparams.get('max_fisher_updates', -1))  # <0 means unlimited
 
         # ---- 原 ACCUP 成员 ----
         self.featurizer = model.feature_extractor
@@ -68,6 +71,7 @@ class ACCUP(BaseTestTimeAlgorithm):
         self.labels = self.warmup_labels.data
         self.ents = self.warmup_ent.data
         self.cls_scores = self.warmup_cls_scores.data
+        self._warmup_count = self.supports.size(0)
 
         # ---- EATA 状态与超参（可在 hparams 覆盖）----
         self.e_margin = float(hparams.get("e_margin", math.log(self.num_classes) * 0.40))  # 低熵阈
@@ -76,6 +80,8 @@ class ACCUP(BaseTestTimeAlgorithm):
         self.lambda_eata = float(hparams.get("lambda_eata", 1.0))                          # 熵项系数
 
         self._eata_trainable_names = None  # 可训练参数名集合
+        self._online_fisher = None
+        self._fisher_samples = 0
 
         # Fisher 可直接给 dict 或路径；没有则回退 L2-SP
         self.fishers = hparams.get("fisher_state", None)
