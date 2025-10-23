@@ -5,6 +5,8 @@ from torchvision import transforms
 import os
 import numpy as np
 
+from utils.utils import safe_torch_load
+
 
 class Load_Dataset(Dataset):  # 加载数据集
     def __init__(self, dataset, dataset_configs):  # dataset_configs包含数据集的配置信息
@@ -101,7 +103,7 @@ class Load_ALL_Dataset(Dataset):  # 加载训练和测试数据集的结合体
 
 def data_generator(data_path, domain_id, dataset_configs, hparams, dtype):
     # 按给定的数据根目录、域 ID、数据集类型（train/val/test）和批大小，构建并返回一个 DataLoader
-    dataset_file = torch.load(os.path.join(data_path, f"{dtype}_{domain_id}.pt"))  # 定位并加载文件
+    dataset_file = safe_torch_load(os.path.join(data_path, f"{dtype}_{domain_id}.pt"))  # 定位并加载文件
 
     dataset = Load_Dataset(dataset_file, dataset_configs)  # 使用 Load_Dataset 类加载数据集
 
@@ -124,8 +126,8 @@ def data_generator(data_path, domain_id, dataset_configs, hparams, dtype):
 
 def whole_targe_data_generator(data_path, domain_id, dataset_configs, hparams):
     # 将目标域 (source=train, target=test) 全部数据整合，用于计算整体指标
-    train_dataset_file = torch.load(os.path.join(data_path, f"{'train'}_{domain_id}.pt"))  # 加载训练集
-    test_dataset_file = torch.load(os.path.join(data_path, f"{'test'}_{domain_id}.pt"))  # 加载测试集
+    train_dataset_file = safe_torch_load(os.path.join(data_path, f"{'train'}_{domain_id}.pt"))  # 加载训练集
+    test_dataset_file = safe_torch_load(os.path.join(data_path, f"{'test'}_{domain_id}.pt"))  # 加载测试集
 
     # Loading datasets
     whole_dataset = Load_ALL_Dataset(train_dataset_file, test_dataset_file, dataset_configs)  # 整合数据集

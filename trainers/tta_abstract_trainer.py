@@ -17,6 +17,8 @@ from configs.data_model_configs import get_dataset_class
 from configs.tta_hparams_new import get_hparams_class
 from algorithms.get_tta_class import get_algorithm_class
 
+from utils.utils import safe_torch_load
+
 from models.da_models import get_backbone_class
 from pre_train_model.pre_train_model import PreTrainModel
 from pre_train_model.build import pre_train_model
@@ -156,7 +158,7 @@ class TTAAbstractTrainer(object):
         torch.save(save_dict, save_path)
 
     def load_checkpoint(self, model_dir): # 从指定目录加载 checkpoint.pt，提取non_adapted模型参数并返回
-        checkpoint = torch.load(os.path.join(self.home_path, model_dir, 'checkpoint.pt'))
+        checkpoint = safe_torch_load(os.path.join(self.home_path, model_dir, 'checkpoint.pt'))
         pretrained_model = checkpoint['non_adapted']
 
         return pretrained_model

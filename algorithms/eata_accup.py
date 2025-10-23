@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from algorithms.base_tta_algorithm import BaseTestTimeAlgorithm  # 路径与 ACCUP 一致
+from utils.utils import safe_torch_load
 
 
 
@@ -70,7 +71,7 @@ class EATA(BaseTestTimeAlgorithm):
                     continue
                 self.fishers[k] = (diag.detach().clone(), theta.detach().clone())
         elif "fisher_path" in hparams and isinstance(hparams["fisher_path"], str) and os.path.exists(hparams["fisher_path"]):
-            raw = torch.load(hparams["fisher_path"], map_location="cpu")
+            raw = safe_torch_load(hparams["fisher_path"], map_location="cpu")
             self.fishers = {}
             for k, v in raw.items():
                 if isinstance(v, (list, tuple)):

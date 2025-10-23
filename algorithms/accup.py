@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from algorithms.base_tta_algorithm import BaseTestTimeAlgorithm, softmax_entropy
 from loss.sup_contrast_loss import domain_contrastive_loss
-from utils.utils import EATAMemory, select_eata_indices, softmax_entropy_from_logits
+from utils.utils import EATAMemory, select_eata_indices, softmax_entropy_from_logits, safe_torch_load
 
 
 class ACCUP(BaseTestTimeAlgorithm):
@@ -87,7 +87,7 @@ class ACCUP(BaseTestTimeAlgorithm):
         # Fisher 可直接给 dict 或路径；没有则回退 L2-SP
         self.fishers = hparams.get("fisher_state", None)
         if self.fishers is None and "fisher_path" in hparams and os.path.exists(hparams["fisher_path"]):
-            self.fishers = torch.load(hparams["fisher_path"], map_location="cpu")
+            self.fishers = safe_torch_load(hparams["fisher_path"], map_location="cpu")
 
     # ----------------- ACCUP 原逻辑 -----------------
     @torch.enable_grad()

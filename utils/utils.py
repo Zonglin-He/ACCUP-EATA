@@ -17,6 +17,18 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
 
 
+def safe_torch_load(*args, **kwargs):
+    """Load torch objects allowing numpy structures when PyTorch defaults to weights-only mode."""
+    kwargs.setdefault("weights_only", False)
+    try:
+        return torch.load(*args, **kwargs)
+    except TypeError as exc:
+        if "unexpected keyword argument 'weights_only'" in str(exc):
+            kwargs.pop("weights_only", None)
+            return torch.load(*args, **kwargs)
+        raise
+
+
 class AverageMeter(object): #计算并存储平均值和当前值
 
     def __init__(self):
