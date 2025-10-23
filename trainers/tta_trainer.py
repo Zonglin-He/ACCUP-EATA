@@ -12,7 +12,7 @@ from datetime import datetime
 import numpy as np
 
 from utils.utils import fix_randomness, starting_logs, AverageMeter
-from .tta_abstract_trainer import TTAAbstractTrainer
+from trainers.tta_abstract_trainer import TTAAbstractTrainer
 from optim.optimizer import build_optimizer
 
 # >>> NEW: 引入记忆库与选择函数

@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .base_tta_algorithm import BaseTestTimeAlgorithm, softmax_entropy
+from algorithms.base_tta_algorithm import BaseTestTimeAlgorithm, softmax_entropy
 from loss.sup_contrast_loss import domain_contrastive_loss
 from utils.utils import EATAMemory, select_eata_indices, softmax_entropy_from_logits
 

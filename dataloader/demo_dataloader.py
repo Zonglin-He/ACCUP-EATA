@@ -5,7 +5,7 @@ from torchvision import transforms
 
 import os, sys
 import numpy as np
-from .augmentations import DataTransform
+from dataloader.augmentations import DataTransform
 
 class Load_Dataset(Dataset):
     """"

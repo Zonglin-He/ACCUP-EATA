@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .base_tta_algorithm import BaseTestTimeAlgorithm  # 路径与 ACCUP 一致
+from algorithms.base_tta_algorithm import BaseTestTimeAlgorithm  # 路径与 ACCUP 一致
 
 
 
