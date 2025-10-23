@@ -27,11 +27,20 @@ try:
 except Exception:
     pass
 
+_torch_original_load = torch.load
+
+
+def _torch_load_with_compat(*args, **kwargs):
+    kwargs.setdefault("weights_only", False)
+    kwargs.setdefault("pickle_module", pickle)
+    return _torch_original_load(*args, **kwargs)
+
+
+torch.load = _torch_load_with_compat
+
 
 def safe_torch_load(*args, **kwargs):
-    """Compat loader that avoids PyTorch 2.6 weights_only issues and supports legacy pickled numpy objects."""
-    kwargs["weights_only"] = False
-    kwargs.setdefault("pickle_module", pickle)
+    """Compat loader kept for clarity; delegates to the patched torch.load."""
     return torch.load(*args, **kwargs)
 
 
