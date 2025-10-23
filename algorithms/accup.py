@@ -223,11 +223,12 @@ class ACCUP(BaseTestTimeAlgorithm):
         ent_s = self.ents
         y_hat = self.labels.argmax(dim=1).long()
         filter_K = self.filter_K
+        device = self.supports.device
         if filter_K == -1:
-            indices = torch.LongTensor(list(range(len(ent_s))))
+            indices = torch.arange(len(ent_s), device=device, dtype=torch.long)
         else:
             indices = []
-            indices1 = torch.LongTensor(list(range(len(ent_s))))
+            indices1 = torch.arange(len(ent_s), device=device, dtype=torch.long)
             for i in range(self.num_classes):
                 _, indices2 = torch.sort(ent_s[y_hat == i])
                 indices.append(indices1[y_hat == i][indices2][:filter_K])
