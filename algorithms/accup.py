@@ -220,14 +220,6 @@ class ACCUP(BaseTestTimeAlgorithm):
         return logits
 
     def select_supports(self):
-        if not getattr(self, "_device_debug_logged", False):
-            print(
-                "[ACCUP.select_supports] pre-align devices: "
-                f"supports={self.supports.device}, labels={self.labels.device}, "
-                f"ents={self.ents.device}, cls_scores={self.cls_scores.device}"
-            )
-            self._device_debug_logged = True
-
         supports = self.supports
         labels = self.labels
         ents = self.ents
@@ -245,14 +237,6 @@ class ACCUP(BaseTestTimeAlgorithm):
         labels = labels.to(working_device)
         ents = ents.to(working_device)
         cls_scores = cls_scores.to(working_device)
-
-        if not getattr(self, "_device_debug_logged_after_align", False):
-            print(
-                "[ACCUP.select_supports] after align: "
-                f"supports={supports.device}, labels={labels.device}, "
-                f"ents={ents.device}, cls_scores={cls_scores.device}"
-            )
-            self._device_debug_logged_after_align = True
 
         ent_s = ents
         y_hat = labels.argmax(dim=1).long()
@@ -273,13 +257,6 @@ class ACCUP(BaseTestTimeAlgorithm):
 
         if indices.device != supports.device:
             indices = indices.to(supports.device)
-
-        if not getattr(self, "_device_debug_logged_before_index", False):
-            print(
-                "[ACCUP.select_supports] before indexing: "
-                f"supports={supports.device}, indices={indices.device}"
-            )
-            self._device_debug_logged_before_index = True
 
         # Apply indices on the aligned local tensors, then update cached tensors
         supports = supports[indices]
