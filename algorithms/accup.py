@@ -220,18 +220,24 @@ class ACCUP(BaseTestTimeAlgorithm):
         return logits
 
     def select_supports(self):
-        device = self.ents.device
-        if self.supports.device != device:
-            self.supports = self.supports.to(device)
-        if self.labels.device != device:
-            self.labels = self.labels.to(device)
-        if self.cls_scores.device != device:
-            self.cls_scores = self.cls_scores.to(device)
-        self.ents = self.ents.to(device)
+        desired_device = self.supports.device
+        ents_device = self.ents.device
+        if desired_device.type == "cpu" and ents_device.type != "cpu":
+            desired_device = ents_device
+
+        if self.supports.device != desired_device:
+            self.supports = self.supports.to(desired_device)
+        if self.labels.device != desired_device:
+            self.labels = self.labels.to(desired_device)
+        if self.cls_scores.device != desired_device:
+            self.cls_scores = self.cls_scores.to(desired_device)
+        if self.ents.device != desired_device:
+            self.ents = self.ents.to(desired_device)
 
         ent_s = self.ents
         y_hat = self.labels.argmax(dim=1).long()
         filter_K = self.filter_K
+        device = self.supports.device
         if filter_K == -1:
             indices = torch.arange(len(ent_s), device=device, dtype=torch.long)
         else:
