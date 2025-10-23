@@ -255,6 +255,9 @@ class ACCUP(BaseTestTimeAlgorithm):
             warm_idx = torch.arange(self._warmup_count, device=indices.device)
             indices = torch.unique(torch.cat([warm_idx, indices]))
 
+        if indices.device != supports.device:
+            indices = indices.to(supports.device)
+
         # Apply indices on the aligned local tensors, then update cached tensors
         supports = supports[indices]
         labels = labels[indices]
