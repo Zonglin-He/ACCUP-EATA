@@ -1,8 +1,8 @@
 ```mermaid
 flowchart LR
   subgraph Inputs
-    Xraw[[X_raw (raw)]]:::io
-    Xaug[[X_aug (aug)]]:::io
+    Xraw([X_raw (raw)]):::io
+    Xaug([X_aug (aug)]):::io
   end
 
   subgraph Model[Encoder–Classifier (shared encoder, locked head)]
@@ -29,7 +29,7 @@ flowchart LR
   PLOG --> EC[Entropy Comparison]:::gate
   AVG2 --> EC
 
-  EC --> SELP[select_pred (for metrics)]:::io
+  EC --> SELP([select_pred (for metrics)]):::io
 
   subgraph EATA[EATA selection & memory]
     MEM[EATAMemory (feats, probs)]:::block
