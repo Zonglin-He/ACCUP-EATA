@@ -46,6 +46,13 @@ class EEG(): # 数据集 (EEG) 参数
         self.jitter_scale_ratio = 1.0 # 1.5
         self.jitter_ration = 0.5 # 2
 
+        # TimesNet defaults
+        self.times_hidden_channels = 128
+        self.times_num_layers = 3
+        self.times_patch_lens = [16, 32, 64]
+        self.times_dropout = 0.1
+        self.times_ffn_expansion = 2
+
 
 class FD(): # 数据集 (FD) 参数
     def __init__(self):
@@ -89,6 +96,13 @@ class FD(): # 数据集 (FD) 参数
         self.jitter_scale_ratio = 1.0 # 2
         self.jitter_ratio = 0.5 # 0.1
 
+        # TimesNet defaults
+        self.times_hidden_channels = 256
+        self.times_num_layers = 3
+        self.times_patch_lens = [32, 64, 128]
+        self.times_dropout = 0.1
+        self.times_ffn_expansion = 2
+
 class HAR(): # 数据集 (HAR) 参数
     def __init__(self):
         super(HAR, self)
@@ -122,4 +136,11 @@ class HAR(): # 数据集 (HAR) 参数
         # augmentations.
         self.jitter_scale_ratio = 1.0 # 1.1
         self.jitter_ratio = 0.5 # 0.8
+
+        # TimesNet defaults
+        self.times_hidden_channels = 128
+        self.times_num_layers = 2
+        self.times_patch_lens = [4, 8, 16]
+        self.times_dropout = 0.1
+        self.times_ffn_expansion = 2
 
