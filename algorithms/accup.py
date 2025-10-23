@@ -251,6 +251,17 @@ class ACCUP(BaseTestTimeAlgorithm):
             warm_idx = torch.arange(self._warmup_count, device=indices.device)
             indices = torch.unique(torch.cat([warm_idx, indices]))
 
+        # Final guard: align buffers with the index device before advanced indexing
+        target_device = indices.device
+        if self.supports.device != target_device:
+            self.supports = self.supports.to(target_device)
+        if self.labels.device != target_device:
+            self.labels = self.labels.to(target_device)
+        if self.ents.device != target_device:
+            self.ents = self.ents.to(target_device)
+        if self.cls_scores.device != target_device:
+            self.cls_scores = self.cls_scores.to(target_device)
+
         self.supports = self.supports[indices]
         self.labels = self.labels[indices]
         self.ents = self.ents[indices]
