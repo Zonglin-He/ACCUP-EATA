@@ -1,3 +1,4 @@
+```mermaid
 flowchart LR
   subgraph Inputs
     Xraw[[X_raw (raw)]]:::io
