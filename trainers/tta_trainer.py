@@ -29,6 +29,8 @@ class TTATrainer(TTAAbstractTrainer):
     """
     def __init__(self, args):  # TTATrainer 初始化
         super(TTATrainer, self).__init__(args)  # 调用父类的初始化方法
+        self.seed = getattr(args, "seed", 42)
+        fix_randomness(self.seed)
         self.exp_log_dir = os.path.join(self.home_path, self.save_dir, self.experiment_description, f"{self.run_description}")  # 实验日志目录
         self.load_pretrained_checkpoint = os.path.join(self.home_path, self.save_dir, self.experiment_description, f"{'NoAdap'}_{'All_Trg'}")  # 预训练检查点路径
         os.makedirs(self.exp_log_dir, exist_ok=True)  # 创建实验日志目录
@@ -48,7 +50,7 @@ class TTATrainer(TTAAbstractTrainer):
             cur_scenario_f1_ret = []
             for run_id in range(self.num_runs):  # 多次运行以计算平均性能
                 self.run_id = run_id
-                fix_randomness(run_id)
+                fix_randomness(self.seed)
                 print(run_id)
                 self.logger, self.scenario_log_dir = starting_logs(self.dataset, self.da_method, self.exp_log_dir, src_id, trg_id, run_id)
                 self.pre_loss_avg_meters = collections.defaultdict(lambda: AverageMeter())

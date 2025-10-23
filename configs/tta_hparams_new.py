@@ -39,6 +39,10 @@ class FD():
                 'lambda_eata': 1.4,
                 'memory_size': 4096,
                 'use_quantile': True,
+                'fisher_alpha': 2000.0,
+                'online_fisher': True,
+                'include_warmup_support': True,
+                'max_fisher_updates': -1,
 
                 'grad_clip': 0.5,
                 'grad_clip_value': None
@@ -80,6 +84,10 @@ class EEG():
                 'lambda_eata': 1.4,
                 'memory_size': 2048,
                 'use_quantile': True,
+                'fisher_alpha': 2000.0,
+                'online_fisher': True,
+                'include_warmup_support': True,
+                'max_fisher_updates': -1,
 
                 'grad_clip': 0.5,
                 'grad_clip_value': None
@@ -123,6 +131,10 @@ class HAR():
                 'safety_keep_frac': 0.65,  # 0.4 -> 0.5，保底更多
                 'memory_size': 4096,
                 'use_quantile': True,
+                'fisher_alpha': 2000.0,
+                'online_fisher': True,
+                'include_warmup_support': True,
+                'max_fisher_updates': -1,
 
                 'grad_clip': 1.0,
                 'grad_clip_value': 0.5

@@ -82,6 +82,7 @@ class ACCUP(BaseTestTimeAlgorithm):
         self._eata_trainable_names = None  # 可训练参数名集合
         self._online_fisher = None
         self._fisher_samples = 0
+        self._fisher_updates = 0
 
         # Fisher 可直接给 dict 或路径；没有则回退 L2-SP
         self.fishers = hparams.get("fisher_state", None)
@@ -127,81 +128,71 @@ class ACCUP(BaseTestTimeAlgorithm):
         idx_un = idx.unsqueeze(1).expand(-1, prt_scores.shape[1])
         select_pred = torch.where(idx_un, prt_scores, cls_scores)  # 返回用
 
-        # ----------------- 这里开始缝入 EATA 的“先选后学 + 正则” -----------------
-        # 懒加载 θ0（用于 L2-SP）
-        # 懒加载 θ0（用于 L2-SP）
+        # ----------------- Begin EATA selection + regularization -----------------
         self._eata_snapshot_if_needed(model)
+        if self.use_eata_reg and self.online_fisher:
+            self._maybe_update_online_fisher(model, [p])
 
-        # 用记忆库做“低熵 + 去冗余”筛选（基于 raw 视图的 logits/feats）
-        hp = self.hparams  # 简写
-
-        sel, log_str = select_eata_indices(
-            logits=r_output.detach(),
-            feats=r_feat.detach(),
-            num_classes=self.num_classes,
-            memory=self.memory,
-
-            # 这里不再给第二个默认参数，缺了就直接抛错，保证一定用到外部传的值
-            e_margin_scale=float(hp['e_margin_scale']),
-            d_margin=float(hp['d_margin']),
-            K=int(hp['filter_K']),
-            temperature=float(hp['temperature']),
-            warmup_min=int(hp['warmup_min']),
-            use_quantile=bool(hp['use_quantile']),
-            quantile=float(hp['quantile']),
-            safety_keep_frac=float(hp['safety_keep_frac']),
-        )
+        hp = self.hparams  # shorthand
+        if self.use_eata_select:
+            sel, log_str = select_eata_indices(
+                logits=r_output.detach(),
+                feats=r_feat.detach(),
+                num_classes=self.num_classes,
+                memory=self.memory,
+                e_margin_scale=float(hp['e_margin_scale']),
+                d_margin=float(hp['d_margin']),
+                K=int(hp['filter_K']),
+                temperature=float(hp['temperature']),
+                warmup_min=int(hp['warmup_min']),
+                use_quantile=bool(hp['use_quantile']),
+                quantile=float(hp['quantile']),
+                safety_keep_frac=float(hp['safety_keep_frac']),
+            )
+        else:
+            sel = torch.arange(r_output.size(0), device=r_output.device)
+            log_str = '[EATA] using full batch (selection disabled)'
 
         print(f"[EATA] select={self.use_eata_select}, reg={self.use_eata_reg}")
         if self.use_eata_select:
             print(f"[EATA] selected {int(sel.numel())}/{r_output.size(0)}")
             print(log_str)
-
-
         else:
-            sel = torch.arange(r_output.size(0), device=r_output.device)
-            print("[EATA] using full batch (no selection)")
+            print(log_str)
         ent_raw = softmax_entropy_from_logits(r_output).detach()
 
-        # 仅对“被选中样本”的三视图做对比损失 + EATA 熵项 + Fisher/L2-SP 正则
-        loss = torch.zeros([], device=z.device)
+        loss_reg = self._eata_regularizer(model) if self.use_eata_reg else torch.zeros([], device=z.device)
+        total_loss = loss_reg
+        should_step = loss_reg.requires_grad
+
         if sel.numel() > 0:
             B = r_output.size(0)
             cat_p = torch.cat([r_output, a_output, p], dim=0)      # [3B, C]
-            cat_y = select_pred.max(1)[1].repeat(3)                # [3B]（用你最终选择后的伪标签）
-            sel3 = torch.cat([sel, sel + B, sel + 2 * B], dim=0)   # 三视图中的选中索引
+            cat_y = select_pred.max(1)[1].repeat(3)                # [3B]
+            sel3 = torch.cat([sel, sel + B, sel + 2 * B], dim=0)
 
-            # 对比损失（仅选中子集）
             loss_con = domain_contrastive_loss(cat_p[sel3], cat_y[sel3],
                                                temperature=self.temperature, device=z.device)
 
-            # EATA 熵项（增广视图更稳）+ 样本重加权 coeff = exp(-(H - e_margin))
             coeff = torch.exp(-(ent_raw[sel].detach() - self.e_margin))
             loss_e = (softmax_entropy_from_logits(a_output[sel]) * coeff).mean()
+            task_loss = loss_con + self.lambda_eata * loss_e
+            total_loss = total_loss + task_loss
+            should_step = True
 
-            # 防遗忘
-            # 防遗忘
-            loss_reg = self._eata_regularizer(model) if self.use_eata_reg else torch.zeros([], device=z.device)
-
-            loss = loss_con + self.lambda_eata * loss_e + loss_reg
-
-        # 只有有选中样本时才更新；否则跳过更新（与 EATA 一致）
         optimizer.zero_grad(set_to_none=True)
-        if sel.numel() > 0:
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                (p_ for p_ in model.parameters() if p_.requires_grad),
-                max_norm=5.0
-            )
+        if total_loss.requires_grad and should_step:
+            total_loss.backward()
+            trainable_params = [p_ for p_ in model.parameters() if p_.requires_grad]
+            if trainable_params:
+                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=5.0)
             optimizer.step()
 
-        # 更新概率均值缓存（做去冗余）
         with torch.no_grad():
             self.memory.push(
                 feats=r_feat.detach(),
                 probs=torch.softmax(r_output.detach(), dim=1),
             )
-
         print('[HPARAMS used]', {k: self.hparams[k] for k in [
             'e_margin_scale', 'd_margin', 'filter_K', 'temperature',
             'warmup_min', 'use_quantile', 'quantile', 'safety_keep_frac']})
@@ -241,6 +232,9 @@ class ACCUP(BaseTestTimeAlgorithm):
                 _, indices2 = torch.sort(ent_s[y_hat == i])
                 indices.append(indices1[y_hat == i][indices2][:filter_K])
             indices = torch.cat(indices)
+        if self.include_warmup_support and getattr(self, "_warmup_count", 0) > 0:
+            warm_idx = torch.arange(self._warmup_count, device=indices.device)
+            indices = torch.unique(torch.cat([warm_idx, indices]))
 
         self.supports = self.supports[indices]
         self.labels = self.labels[indices]
@@ -300,6 +294,43 @@ class ACCUP(BaseTestTimeAlgorithm):
                 if n in self._eata_trainable_names
             }
 
+    def _maybe_update_online_fisher(self, model, logits_list):
+        """Approximate diagonal Fisher online for test-time regularization."""
+        if (not self.online_fisher) or (not logits_list):
+            return
+        if self.max_fisher_updates >= 0 and self._fisher_updates >= self.max_fisher_updates:
+            return
+
+        trainable = [(n, p) for n, p in model.named_parameters() if p.requires_grad]
+        if not trainable:
+            return
+
+        if self._online_fisher is None:
+            self._online_fisher = {n: torch.zeros_like(p) for n, p in trainable}
+
+        names, params = zip(*trainable)
+        params = list(params)
+        names = list(names)
+        any_update = False
+
+        for logits in logits_list:
+            if logits is None or (not hasattr(logits, 'requires_grad')) or (not logits.requires_grad):
+                continue
+            probs = torch.softmax(logits, dim=1)
+            log_probs = torch.log_softmax(logits, dim=1)
+            fisher_loss = -(probs * log_probs).sum(dim=1).mean()
+            grads = torch.autograd.grad(fisher_loss, params, retain_graph=True, allow_unused=True)
+            for name, grad in zip(names, grads):
+                if grad is None:
+                    continue
+                self._online_fisher[name] = self._online_fisher[name].to(grad.device)
+                self._online_fisher[name] += grad.detach() ** 2
+                any_update = True
+            self._fisher_samples += logits.size(0)
+
+        if any_update:
+            self._fisher_updates += 1
+
     def _eata_regularizer(self, model):
         """Fisher（优先）或 L2-SP（兜底），只作用于 requires_grad=True 的参数。"""
         device = next(model.parameters()).device
@@ -322,6 +353,19 @@ class ACCUP(BaseTestTimeAlgorithm):
             if reg is not None:
                 return self.fisher_alpha * reg
 
+        # Online Fisher fallback
+        if self._online_fisher and self._fisher_samples > 0:
+            reg_online = None
+            normalizer = float(self._fisher_samples)
+            for n, p in model.named_parameters():
+                if p.requires_grad and (n in self._online_fisher):
+                    theta_prev = theta0.get(n, p.detach()) if theta0 is not None else p.detach()
+                    theta_prev = theta_prev.to(device)
+                    diag = (self._online_fisher[n] / normalizer).to(device)
+                    term = (diag * (p - theta_prev) ** 2).sum()
+                    reg_online = term if reg_online is None else (reg_online + term)
+            if reg_online is not None:
+                return self.fisher_alpha * reg_online
         # L2-SP 兜底
         if theta0 is None:
             return torch.zeros([], device=device)
