@@ -313,15 +313,29 @@ from typing import Optional, Dict
 class EATAMemory:
     def __init__(self, maxlen: int = 4096, device: str = "cpu"):
         self.maxlen = maxlen
-        self.device = device
+        self.device = torch.device(device)
         self._feats = None    # [M, D], unit-normalized
         self._probs = None    # [M, C]
 
     def __len__(self):
         return 0 if self._feats is None else int(self._feats.size(0))
 
+    def to(self, device: torch.device):
+        """切换记忆库所使用的设备，并同步已缓存的数据。"""
+        device = torch.device(device)
+        if self.device == device:
+            return self
+        if self._feats is not None:
+            self._feats = self._feats.to(device)
+        if self._probs is not None:
+            self._probs = self._probs.to(device)
+        self.device = device
+        return self
+
     @torch.no_grad()
     def push(self, feats: torch.Tensor, probs: torch.Tensor):
+        if feats.device != self.device:
+            self.to(feats.device)
         feats = F.normalize(feats.detach(), dim=1).to(self.device)
         probs = probs.detach().to(self.device)
         if self._feats is None:
@@ -340,7 +354,8 @@ class EATAMemory:
             return dens, {"mean": float("nan"), "med": float("nan"), "p90": float("nan")}, 0
 
         feats = F.normalize(feats, dim=1)
-        sims = feats @ self._feats.T                     # [B, M]
+        mem_feats = self._feats.to(feats.device)
+        sims = feats @ mem_feats.T                       # [B, M]
         k_eff = min(K, sims.size(1))
         topk, _ = torch.topk(sims, k=k_eff, dim=1)       # [B, k_eff]
         dens = topk.mean(dim=1)                          # 越大越“像”记忆库
@@ -434,6 +449,8 @@ def select_eata_indices(
     cand = torch.where(ent < e_th)[0]
 
     # ---------- 密度过滤（去冗余/取“更近”） ----------
+    if hasattr(memory, "to"):
+        memory.to(feats.device)
     dens, stats, k_eff = memory.density(feats, K=K)
     if k_eff > 0 and cand.numel() > 0:
         dens_c = dens[cand]
