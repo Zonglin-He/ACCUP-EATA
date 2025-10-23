@@ -1,0 +1,11 @@
+torch
+torchvision
+torchmetrics
+numpy
+pandas
+scikit-learn
+scipy
+einops
+skorch
+wandb
+openpyxl
