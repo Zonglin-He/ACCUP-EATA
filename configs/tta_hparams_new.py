@@ -44,6 +44,14 @@ class FD():
                 'include_warmup_support': True,
                 'max_fisher_updates': -1,
 
+                'train_full_backbone': True,   # allow full backbone (e.g. TimesNet) to receive gradients
+                'train_classifier': True,
+                'freeze_bn_stats': False,
+
+                'scenario_overrides': {
+                    # ('src_id', 'trg_id'): {'learning_rate': 5e-4, 'tau': 12},
+                },
+
                 'grad_clip': 0.5,
                 'grad_clip_value': None
             },
@@ -88,6 +96,14 @@ class EEG():
                 'online_fisher': True,
                 'include_warmup_support': True,
                 'max_fisher_updates': -1,
+
+                'train_full_backbone': True,   # allow full backbone (e.g. TimesNet) to receive gradients
+                'train_classifier': True,
+                'freeze_bn_stats': False,
+
+                'scenario_overrides': {
+                    # ('src_id', 'trg_id'): {'learning_rate': 5e-4, 'tau': 12},
+                },
 
                 'grad_clip': 0.5,
                 'grad_clip_value': None
@@ -135,6 +151,15 @@ class HAR():
                 'online_fisher': True,
                 'include_warmup_support': True,
                 'max_fisher_updates': -1,
+
+                'train_full_backbone': True,   # allow full backbone (e.g. TimesNet) to receive gradients
+                'train_classifier': True,
+                'freeze_bn_stats': False,
+
+                'scenario_overrides': {
+                    # ('2', '11'): {'learning_rate': 5e-4, 'tau': 18},
+                    # ('6', '23'): {'learning_rate': 3e-5, 'lambda_eata': 1.2},
+                },
 
                 'grad_clip': 1.0,
                 'grad_clip_value': 0.5

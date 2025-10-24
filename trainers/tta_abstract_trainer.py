@@ -52,7 +52,11 @@ class TTAAbstractTrainer(object):
         self.num_runs = args.num_runs
         self.dataset_configs, self.hparams_class = self.get_configs()
         self.dataset_configs.final_out_channels = self.dataset_configs.tcn_final_out_channles if args.backbone == "TCN" else self.dataset_configs.final_out_channels
-        self.hparams = {**self.hparams_class.alg_hparams[self.da_method], **self.hparams_class.train_params}
+        alg_hparams_all = dict(self.hparams_class.alg_hparams[self.da_method])
+        self._scenario_hparam_overrides = alg_hparams_all.pop("scenario_overrides", {})
+        self._base_alg_hparams = alg_hparams_all
+        self._train_params = dict(self.hparams_class.train_params)
+        self.hparams = {**self._base_alg_hparams, **self._train_params}
 
         self.num_classes = self.dataset_configs.num_classes
         # 准备评估指标：Accuracy（多分类），宏F1，AUROC（多分类）
@@ -105,6 +109,27 @@ class TTAAbstractTrainer(object):
         dataset_class = get_dataset_class(self.dataset)
         hparams_class = get_hparams_class(self.dataset)
         return dataset_class(), hparams_class()
+
+    def set_scenario_hparams(self, src_id, trg_id):
+        """
+        Refresh active hyperparameters for a specific source→target scenario.
+        Allows per-scenario tuning by merging overrides on top of base + train params.
+        """
+        combined = {**self._base_alg_hparams, **self._train_params}
+        overrides = {}
+        if isinstance(self._scenario_hparam_overrides, dict):
+            key_tuple = (str(src_id), str(trg_id))
+            overrides = self._scenario_hparam_overrides.get(key_tuple)
+            if overrides is None:
+                key_arrow = f"{src_id}->{trg_id}"
+                overrides = self._scenario_hparam_overrides.get(key_arrow)
+            if overrides is None:
+                key_to = f"{src_id}_to_{trg_id}"
+                overrides = self._scenario_hparam_overrides.get(key_to)
+        if overrides:
+            combined.update(overrides)
+        self.hparams = combined
+        return self.hparams
 
     def get_tta_model_class(self): #获取指定的 TTA 模型类
         tta_model_class = get_algorithm_class(self.da_method)

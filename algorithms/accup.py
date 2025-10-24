@@ -272,26 +272,59 @@ class ACCUP(BaseTestTimeAlgorithm):
 
     def configure_model(self, model):
         """
-        与原 ACCUP 一致：训练模式；冻结全网；
-        BN 用 batch 统计并允许仿射更新；Conv1d 的三个 block 打开训练。
-        （EATA 的正则会只针对 requires_grad=True 的这些参数）
+        Set the modules that participate in adaptation.
+
+        Defaults mimic the original ACCUP behaviour (BN affine + early Conv1d blocks),
+        but the scope can be expanded through hyperparameters:
+          - train_full_backbone: unfreeze the entire feature_extractor (e.g. TimesNet)
+          - train_backbone_modules: iterable of module names inside feature_extractor to unfreeze
+          - train_classifier: allow the classifier head to adapt alongside the backbone
+          - freeze_bn_stats: keep running stats frozen (legacy default) or let them update
+          - train_bn_affine: toggle whether BN affine parameters remain trainable
         """
         model.train()
         model.requires_grad_(False)
 
-        for module in model.modules():
-            if isinstance(module, nn.BatchNorm1d) or isinstance(module, nn.BatchNorm2d):
-                module.track_running_stats = False
-                module.running_mean = None
-                module.running_var = None
-                module.weight.requires_grad_(True)
-                module.bias.requires_grad_(True)
+        freeze_bn_stats = bool(self.hparams.get("freeze_bn_stats", True))
+        train_bn_affine = bool(self.hparams.get("train_bn_affine", True))
+        train_full_backbone = bool(self.hparams.get("train_full_backbone", False))
+        train_backbone_modules = self.hparams.get("train_backbone_modules", None)
+        train_classifier = bool(self.hparams.get("train_classifier", train_full_backbone))
 
-        for name, module in model.feature_extractor.named_children():
-            if name in ('conv_block1', 'conv_block2', 'conv_block3'):
-                for sub_module in module.children():
-                    if isinstance(sub_module, nn.Conv1d):
-                        sub_module.requires_grad_(True)
+        for module in model.modules():
+            if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
+                if freeze_bn_stats:
+                    module.track_running_stats = False
+                    module.running_mean = None
+                    module.running_var = None
+                else:
+                    module.track_running_stats = True
+                if train_bn_affine:
+                    if module.weight is not None:
+                        module.weight.requires_grad_(True)
+                    if module.bias is not None:
+                        module.bias.requires_grad_(True)
+
+        if train_full_backbone:
+            for param in model.feature_extractor.parameters():
+                param.requires_grad_(True)
+        elif train_backbone_modules:
+            target_names = set(train_backbone_modules if isinstance(train_backbone_modules, (list, tuple, set)) else [train_backbone_modules])
+            for name, module in model.feature_extractor.named_modules():
+                if name in target_names:
+                    for param in module.parameters():
+                        param.requires_grad_(True)
+        else:
+            for name, module in model.feature_extractor.named_children():
+                if name in ('conv_block1', 'conv_block2', 'conv_block3'):
+                    for sub_module in module.children():
+                        if isinstance(sub_module, nn.Conv1d):
+                            sub_module.requires_grad_(True)
+
+        if train_classifier and hasattr(model, "classifier"):
+            for param in model.classifier.parameters():
+                param.requires_grad_(True)
+
         return model
 
     # ----------------- EATA 小工具 -----------------

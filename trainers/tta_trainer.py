@@ -47,6 +47,7 @@ class TTATrainer(TTAAbstractTrainer):
         table_risks = pd.DataFrame(columns=risks_columns)
 
         for src_id, trg_id in self.dataset_configs.scenarios:  # 遍历所有源目标域对
+            self.set_scenario_hparams(src_id, trg_id)  # 每个场景刷新对应超参数
             cur_scenario_f1_ret = []
             for run_id in range(self.num_runs):  # 多次运行以计算平均性能
                 self.run_id = run_id
