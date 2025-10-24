@@ -123,17 +123,18 @@ def suggest_accup_params(trial: optuna.Trial, base_hparams: Dict[str, float]) ->
     suggestions = {
         "learning_rate": trial.suggest_float("learning_rate", 1e-5, 5e-4, log=True),
         "pre_learning_rate": trial.suggest_float("pre_learning_rate", 1e-5, 5e-4, log=True),
-        "filter_K": trial.suggest_int("filter_K", 5, 31, step=2),
+        "filter_K": trial.suggest_int("filter_K", 5, 33, step=2),
         "tau": trial.suggest_int("tau", 5, 30),
         "temperature": trial.suggest_float("temperature", 0.3, 3.0),
-        "warmup_min": trial.suggest_int("warmup_min", 16, 256),
-        "quantile": trial.suggest_float("quantile", 0.5, 0.95),
-        "safety_keep_frac": trial.suggest_float("safety_keep_frac", 0.05, 0.8),
+        "warmup_min": trial.suggest_int("warmup_min", 8, 320),
+        "quantile": trial.suggest_float("quantile", 0.1, 0.9),
+        "use_quantile": trial.suggest_categorical("use_quantile", [True, False]),
+        "safety_keep_frac": trial.suggest_float("safety_keep_frac", 0.05, 0.9),
         "lambda_eata": trial.suggest_float("lambda_eata", 0.5, 2.5),
         "e_margin_scale": trial.suggest_float("e_margin_scale", 0.2, 0.9),
-        "d_margin": trial.suggest_float("d_margin", 0.0, 0.1),
+        "d_margin": trial.suggest_float("d_margin", 0.0, 0.15),
         "memory_size": trial.suggest_int("memory_size", 512, 4096, step=256),
-        "fisher_alpha": trial.suggest_float("fisher_alpha", 500.0, 8000.0),
+        "fisher_alpha": trial.suggest_float("fisher_alpha", 500.0, 9000.0),
     }
 
     # Keep values within sensible bounds around the defaults if available.
