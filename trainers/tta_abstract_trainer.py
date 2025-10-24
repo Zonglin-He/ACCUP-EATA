@@ -64,6 +64,11 @@ class TTAAbstractTrainer(object):
         self.F1 = F1Score(task="multiclass", num_classes=self.num_classes, average="macro")
         self.AUROC = AUROC(task="multiclass", num_classes=self.num_classes)
 
+        # Cache latest experiment metrics so external tools (e.g., Optuna) can read them
+        self.scenario_metrics = {}
+        self.last_table_results = None
+        self.last_table_risks = None
+
     def sweep(self):
         pass
 

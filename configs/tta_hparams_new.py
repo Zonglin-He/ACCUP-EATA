@@ -1,5 +1,81 @@
 import math
 
+
+def scenario(src_id, trg_id):
+    """Normalize场景ID为字符串元组，避免'几to几'写错或类型不一致。"""
+    return str(src_id), str(trg_id)
+
+
+HAR_ACCUP_SCENARIO_OVERRIDES = {
+    scenario(6, 23): {
+        'learning_rate': 2.2753505223126986e-05,
+        'pre_learning_rate': 0.0003338822801641277,
+        'filter_K': 23,
+        'tau': 30,
+        'temperature': 1.1745975040622931,
+        'warmup_min': 77,
+        'quantile': 0.9408771415733412,
+        'safety_keep_frac': 0.215975500824709,
+        'lambda_eata': 2.3520584592343377,
+        'e_margin_scale': 0.5529453366693213,
+        'd_margin': 0.08753985821873647,
+        'memory_size': 1792,
+        'fisher_alpha': 5271.57289066215
+    },
+    scenario(7, 13): {
+        'learning_rate': 2.4202173680587405e-05,
+        'pre_learning_rate': 0.0004905457868560195,
+        'filter_K': 21,
+        'tau': 30,
+        'temperature': 1.77551406001387,
+        'warmup_min': 103,
+        'quantile': 0.9350629148701761,
+        'safety_keep_frac': 0.1590404711695088,
+        'lambda_eata': 1.7527194782975355,
+        'e_margin_scale': 0.8869776773057166,
+        'd_margin': 0.02059152893472859,
+        'memory_size': 2560,
+        'fisher_alpha': 1576.4941902477176
+
+    },
+    scenario(9, 18): {
+           'learning_rate': 1.1511585680068082e-05,
+            'pre_learning_rate': 0.00017903636106246677,
+            'filter_K': 23,
+            'tau': 30,
+            'temperature': 1.3680608746243965,
+            'warmup_min': 83,
+            'quantile': 0.9417889258036682,
+            'safety_keep_frac': 0.29519346015191145,
+            'lambda_eata': 2.3634089504869173,
+            'e_margin_scale': 0.4999073720347249,
+            'd_margin': 0.03852076679814576,
+            'memory_size': 1792,
+            'fisher_alpha': 7052.155092372549
+
+    },
+    scenario(12, 16): {
+        'learning_rate': 2.0740580122695722e-05,
+        'pre_learning_rate': 0.00040512511160526344,
+        'filter_K': 21,
+        'tau': 30,
+        'temperature': 2.5764790019089028,
+        'warmup_min': 214,
+        'quantile': 0.9499134672993275,
+        'safety_keep_frac': 0.21602750119636374,
+        'lambda_eata': 0.9397129269263443,
+        'e_margin_scale': 0.4735038935494198,
+        'd_margin': 0.07395967204894886,
+        'memory_size': 2560,
+        'fisher_alpha': 5866.516763771302
+    },
+}
+
+EEG_ACCUP_SCENARIO_OVERRIDES = {
+    # 调参完成后把结果写到这里，例如：
+    # scenario(0, 11): {'learning_rate': ...},
+}
+
 def get_hparams_class(dataset_name):  # 根据给定数据集名称字符串返回对应的数据集配置类
     if dataset_name not in globals():
         raise NotImplementedError("Dataset not found: {}".format(dataset_name))
@@ -48,9 +124,7 @@ class FD():
                 'train_classifier': True,
                 'freeze_bn_stats': False,
 
-                'scenario_overrides': {
-                    # ('src_id', 'trg_id'): {'learning_rate': 5e-4, 'tau': 12},
-                },
+                'scenario_overrides': dict(EEG_ACCUP_SCENARIO_OVERRIDES),
 
                 'grad_clip': 0.5,
                 'grad_clip_value': None
@@ -156,10 +230,7 @@ class HAR():
                 'train_classifier': True,
                 'freeze_bn_stats': False,
 
-                'scenario_overrides': {
-                    # ('2', '11'): {'learning_rate': 5e-4, 'tau': 18},
-                    # ('6', '23'): {'learning_rate': 3e-5, 'lambda_eata': 1.2},
-                },
+                'scenario_overrides': dict(HAR_ACCUP_SCENARIO_OVERRIDES),
 
                 'grad_clip': 1.0,
                 'grad_clip_value': 0.5

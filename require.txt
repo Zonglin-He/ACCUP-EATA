@@ -10,3 +10,4 @@ einops
 skorch
 wandb
 openpyxl
+optuna
