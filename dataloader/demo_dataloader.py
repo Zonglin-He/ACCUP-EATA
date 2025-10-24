@@ -5,7 +5,8 @@ from torchvision import transforms
 
 import os, sys
 import numpy as np
-from .augmentations import DataTransform
+from dataloader.augmentations import DataTransform
+from utils.utils import safe_torch_load
 
 class Load_Dataset(Dataset):
     """"
@@ -140,7 +141,7 @@ class Load_ALL_Dataset(Dataset):
         return self.len
 
 def data_generator_demo(data_path, domain_id, dataset_configs, hparams, dtype):
-    dataset_file = torch.load(os.path.join(data_path, f"{dtype}_{domain_id}.pt"))
+    dataset_file = safe_torch_load(os.path.join(data_path, f"{dtype}_{domain_id}.pt"))
     dataset = Load_Dataset(dataset_file, dataset_configs)
     if dtype == "test":
         shuffle = False
@@ -159,8 +160,8 @@ def data_generator_demo(data_path, domain_id, dataset_configs, hparams, dtype):
 
 
 def data_generator_old(data_path, domain_id, dataset_configs, hparams):
-    train_dataset = torch.load(os.path.join(data_path, "train_" + domain_id + ".pt"))
-    test_dataset = torch.load(os.path.join(data_path, "test_" + domain_id + ".pt"))
+    train_dataset = safe_torch_load(os.path.join(data_path, "train_" + domain_id + ".pt"))
+    test_dataset = safe_torch_load(os.path.join(data_path, "test_" + domain_id + ".pt"))
 
     train_dataset = Load_Dataset(train_dataset, dataset_configs)
     test_dataset = Load_Dataset(test_dataset, dataset_configs)
@@ -201,9 +202,8 @@ def few_shot_data_generator(data_loader, dataset_configs, num_samples=5):
 def whole_targe_data_generator_demo(data_path, domain_id, dataset_configs, hparams, seed_id=1):
     """只用于评测目标域：严格只读 test_{domain_id}.pt，避免任何训练集泄漏。"""
     # 只读目标域 test
-    test_dataset_file = torch.load(
-        os.path.join(data_path, f"test_{domain_id}.pt"),
-        weights_only=False  # 若用的是新 PyTorch 可改为 True
+    test_dataset_file = safe_torch_load(
+        os.path.join(data_path, f"test_{domain_id}.pt")
     )
 
     # 用带增强的单域加载器（会返回 (x, aug, aug2)）

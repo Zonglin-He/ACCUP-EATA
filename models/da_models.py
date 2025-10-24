@@ -1,6 +1,8 @@
 import torch
 from torch import nn
 
+from models.timesnet_backbone import TimesNet
+
 def get_backbone_class(backbone_name): #根据给定的名称返回对应的类
     if backbone_name not in globals():
         raise NotImplementedError("Algorithm not found: {}".format(backbone_name))

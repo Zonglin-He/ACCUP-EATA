@@ -1,5 +1,5 @@
 import torch
-from .pre_train_model import PreTrainModel
+from pre_train_model.pre_train_model import PreTrainModel
 from models.loss import CrossEntropyLabelSmooth
 from copy import deepcopy
 from sklearn.metrics import accuracy_score, f1_score

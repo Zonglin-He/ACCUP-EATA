@@ -1,0 +1,12 @@
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
+torchmetrics
+numpy
+pandas
+scikit-learn
+scipy
+einops
+skorch
+wandb
+openpyxl
