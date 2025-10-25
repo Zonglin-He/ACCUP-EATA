@@ -1,5 +1,8 @@
 import argparse
+import importlib.util
 import json
+import math
+import uuid
 from argparse import Namespace
 from pathlib import Path
 from typing import Any, Dict, Tuple, Optional
@@ -45,6 +48,17 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Optional JSON file to update with the best trial params/metrics keyed by scenario.",
+    )
+    parser.add_argument(
+        '--write-overrides',
+        action='store_true',
+        help="Persist best params into configs/tta_hparams_new.py scenario_overrides.",
+    )
+    parser.add_argument(
+        '--overrides-config',
+        type=str,
+        default='configs/tta_hparams_new.py',
+        help="Path to the hyperparameter config containing SCENARIO_OVERRIDES dictionaries.",
     )
 
     return parser.parse_args()
@@ -118,7 +132,80 @@ def generate_visualizations(study: optuna.Study, out_dir: str):
         print(f"Saved {target_file}")
 
 
-def suggest_accup_params(trial: optuna.Trial, base_hparams: Dict[str, float]) -> Dict[str, float]:
+def _int_bounds_from_base(base: float, lower_ratio: float = 0.5, upper_ratio: float = 1.5,
+                          min_value: int = 1, max_value: Optional[int] = None) -> Tuple[int, int]:
+    """Derive integer search bounds around a baseline value."""
+    try:
+        base_val = int(base)
+    except (TypeError, ValueError):
+        base_val = min_value
+    low = max(min_value, int(math.floor(base_val * lower_ratio)))
+    high = int(math.ceil(base_val * upper_ratio))
+    if high <= low:
+        high = low + 1
+    if max_value is not None:
+        high = min(high, max_value)
+        if high <= low:
+            low = max(min_value, high - 1)
+    return low, high
+
+
+def suggest_train_params(trial: optuna.Trial, train_params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Expand the search space to include generic training hyperparameters."""
+    if not train_params:
+        return {}
+
+    suggestions: Dict[str, Any] = {}
+
+    if "num_epochs" in train_params:
+        low, high = _int_bounds_from_base(train_params["num_epochs"], min_value=5, max_value=200)
+        suggestions["num_epochs"] = trial.suggest_int("num_epochs", low, high)
+
+    if "batch_size" in train_params:
+        low, high = _int_bounds_from_base(train_params["batch_size"], min_value=16, max_value=256)
+        suggestions["batch_size"] = trial.suggest_int("batch_size", low, high, step=8)
+
+    if "weight_decay" in train_params:
+        base = float(train_params["weight_decay"])
+        suggestions["weight_decay"] = trial.suggest_float(
+            "weight_decay",
+            max(1e-6, base / 10.0),
+            min(1e-2, base * 10.0),
+            log=True,
+        )
+
+    if "step_size" in train_params:
+        low, high = _int_bounds_from_base(train_params["step_size"], min_value=5, max_value=80)
+        suggestions["step_size"] = trial.suggest_int("step_size", low, high)
+
+    if "lr_decay" in train_params:
+        base = float(train_params["lr_decay"])
+        suggestions["lr_decay"] = trial.suggest_float(
+            "lr_decay",
+            max(0.1, base * 0.5),
+            min(0.99, base * 1.5),
+        )
+
+    if "steps" in train_params:
+        base = max(1, int(train_params["steps"]))
+        suggestions["steps"] = trial.suggest_int("steps", 1, max(5, base + 3))
+
+    if "momentum" in train_params:
+        base = float(train_params["momentum"])
+        suggestions["momentum"] = trial.suggest_float(
+            "momentum",
+            max(0.1, base * 0.7),
+            min(0.999, base * 1.1),
+        )
+
+    return suggestions
+
+
+def suggest_accup_params(
+    trial: optuna.Trial,
+    base_hparams: Dict[str, float],
+    train_params: Optional[Dict[str, Any]] = None,
+) -> Dict[str, float]:
     """Define search space for ACCUP + EATA."""
     suggestions = {
         "learning_rate": trial.suggest_float("learning_rate", 1e-5, 5e-4, log=True),
@@ -135,6 +222,20 @@ def suggest_accup_params(trial: optuna.Trial, base_hparams: Dict[str, float]) ->
         "d_margin": trial.suggest_float("d_margin", 0.0, 0.15),
         "memory_size": trial.suggest_int("memory_size", 512, 4096, step=256),
         "fisher_alpha": trial.suggest_float("fisher_alpha", 500.0, 9000.0),
+        "use_eata_select": trial.suggest_categorical("use_eata_select", [True, False]),
+        "use_eata_reg": trial.suggest_categorical("use_eata_reg", [True, False]),
+        "online_fisher": trial.suggest_categorical("online_fisher", [True, False]),
+        "include_warmup_support": trial.suggest_categorical("include_warmup_support", [True, False]),
+        "max_fisher_updates": trial.suggest_categorical(
+            "max_fisher_updates", [-1, 32, 64, 128, 256, 512, 1024]
+        ),
+        "train_full_backbone": trial.suggest_categorical("train_full_backbone", [True, False]),
+        "train_classifier": trial.suggest_categorical("train_classifier", [True, False]),
+        "freeze_bn_stats": trial.suggest_categorical("freeze_bn_stats", [True, False]),
+        "grad_clip": trial.suggest_float("grad_clip", 0.1, 1.5),
+        "grad_clip_value": trial.suggest_categorical(
+            "grad_clip_value", [None, 0.05, 0.1, 0.25, 0.5, 1.0]
+        ),
     }
 
     # Keep values within sensible bounds around the defaults if available.
@@ -144,16 +245,137 @@ def suggest_accup_params(trial: optuna.Trial, base_hparams: Dict[str, float]) ->
         hi = default_temp * 2.5
         suggestions["temperature"] = trial.suggest_float("temperature", lo, hi)
 
+    if train_params:
+        suggestions.update(suggest_train_params(trial, train_params))
+
     return suggestions
 
 
-def build_search_space(trial: optuna.Trial, method: str, base_hparams: Dict[str, float]) -> Dict[str, float]:
+def build_search_space(
+    trial: optuna.Trial,
+    method: str,
+    base_hparams: Dict[str, float],
+    train_params: Optional[Dict[str, Any]] = None,
+) -> Dict[str, float]:
     method = method.lower()
     if method == "accup":
-        return suggest_accup_params(trial, base_hparams)
+        return suggest_accup_params(trial, base_hparams, train_params)
     if method == "noadap":
         return {"pre_learning_rate": trial.suggest_float("pre_learning_rate", 1e-5, 1e-3, log=True)}
     raise NotImplementedError(f"No search space implemented for method {method}.")
+
+
+def _load_hparam_module(config_path: Path):
+    spec = importlib.util.spec_from_file_location(
+        f"_tta_hparams_{config_path.stem}_{uuid.uuid4().hex}",
+        config_path,
+    )
+    if not spec or not spec.loader:
+        raise RuntimeError(f"Unable to load hparam config at {config_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _is_int_like(value: Any) -> bool:
+    try:
+        int(str(value))
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _format_scenario_component(value: Any) -> str:
+    if _is_int_like(value):
+        return str(int(str(value)))
+    return repr(str(value))
+
+
+def _scenario_sort_key(key: Tuple[str, str]) -> Tuple[Any, Any]:
+    def _component(val: str):
+        if _is_int_like(val):
+            return 0, int(val)
+        return 1, str(val)
+
+    return _component(key[0]), _component(key[1])
+
+
+def _render_overrides_block(
+    var_name: str,
+    overrides: Dict[Tuple[str, str], Dict[str, Any]],
+) -> str:
+    lines = [f"{var_name} = {{"]  # opening brace
+    items = sorted(overrides.items(), key=lambda item: _scenario_sort_key(item[0]))
+    if items:
+        for idx, ((src, trg), params) in enumerate(items):
+            lines.append(
+                f"    scenario({_format_scenario_component(src)}, {_format_scenario_component(trg)}): {{"
+            )
+            for param_name in sorted(params.keys()):
+                param_value = params[param_name]
+                lines.append(f"        '{param_name}': {repr(param_value)},")
+            lines.append("    },")
+            if idx < len(items) - 1:
+                lines.append("")
+    else:
+        lines.append("    # scenario(src_id, trg_id): {'learning_rate': ...},")
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def _replace_block_in_file(config_path: Path, var_name: str, new_block: str):
+    lines = config_path.read_text(encoding="utf-8").splitlines()
+    start_idx = None
+    end_idx = None
+    brace_balance = 0
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if start_idx is None and stripped.startswith(f"{var_name}") and "={" in stripped.replace(" ", ""):
+            start_idx = idx
+            brace_balance = line.count("{") - line.count("}")
+            if brace_balance == 0:
+                end_idx = idx
+                break
+            continue
+
+        if start_idx is not None:
+            brace_balance += line.count("{") - line.count("}")
+            if brace_balance == 0:
+                end_idx = idx
+                break
+
+    if start_idx is None or end_idx is None:
+        raise RuntimeError(f"Could not locate block for {var_name} in {config_path}")
+
+    replacement = new_block.splitlines()
+    lines[start_idx:end_idx + 1] = replacement
+    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def update_scenario_overrides(
+    config_path: Path,
+    dataset: str,
+    method: str,
+    scenario: Tuple[str, str],
+    params: Dict[str, Any],
+):
+    """Write/refresh the scenario overrides entry for a given dataset + method."""
+    config_path = config_path.resolve()
+    if not config_path.exists():
+        raise FileNotFoundError(f"Cannot find overrides config at {config_path}")
+
+    module = _load_hparam_module(config_path)
+    var_name = f"{dataset.upper()}_{method.upper()}_SCENARIO_OVERRIDES"
+    current_overrides = getattr(module, var_name, None)
+    if current_overrides is None:
+        raise RuntimeError(f"{var_name} not defined inside {config_path}")
+
+    normalized_key = (str(scenario[0]), str(scenario[1]))
+    merged = dict(current_overrides)
+    merged[normalized_key] = dict(params)
+    new_block = _render_overrides_block(var_name, merged)
+    _replace_block_in_file(config_path, var_name, new_block)
 
 
 def make_trainer_args(args: argparse.Namespace, trial_number: int) -> Namespace:
@@ -181,7 +403,12 @@ def objective(trial: optuna.Trial, args: argparse.Namespace, scenario: Tuple[str
 
     # Sample new hyperparameters and apply before adaptation
     base_hparams = dict(trainer._base_alg_hparams)
-    trial_hparams = build_search_space(trial, args.da_method, base_hparams)
+    trial_hparams = build_search_space(
+        trial,
+        args.da_method,
+        base_hparams,
+        dict(trainer._train_params),
+    )
 
     scenario_key = (str(src_id), str(trg_id))
     overrides = dict(trainer._scenario_hparam_overrides.get(scenario_key, {}))
@@ -274,6 +501,21 @@ def main():
 
             summary_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
             print(f"Updated best hyperparameters at {summary_path} for scenario {scenario_key}.")
+
+        if args.write_overrides:
+            overrides_path = Path(args.overrides_config)
+            update_scenario_overrides(
+                overrides_path,
+                args.dataset,
+                args.da_method,
+                scenario,
+                best.params,
+            )
+            print(
+                "Updated "
+                f"{args.dataset.upper()}_{args.da_method.upper()}_SCENARIO_OVERRIDES "
+                f"in {overrides_path} for scenario {scenario_key}."
+            )
 
     if args.viz_dir:
         generate_visualizations(study, args.viz_dir)
