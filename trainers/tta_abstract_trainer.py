@@ -1,4 +1,5 @@
 import sys
+from copy import deepcopy
 
 sys.path.append('../../ADATIME/')
 import torch
@@ -57,6 +58,19 @@ class TTAAbstractTrainer(object):
         self._base_alg_hparams = alg_hparams_all
         self._train_params = dict(self.hparams_class.train_params)
         self.hparams = {**self._base_alg_hparams, **self._train_params}
+
+        self._backbone_attr_names = (
+            "times_hidden_channels",
+            "times_num_layers",
+            "times_patch_lens",
+            "times_dropout",
+            "times_ffn_expansion",
+        )
+        self._dataset_backbone_defaults = {
+            attr: deepcopy(getattr(self.dataset_configs, attr))
+            for attr in self._backbone_attr_names
+            if hasattr(self.dataset_configs, attr)
+        }
 
         self.num_classes = self.dataset_configs.num_classes
         # 准备评估指标：Accuracy（多分类），宏F1，AUROC（多分类）
@@ -133,8 +147,17 @@ class TTAAbstractTrainer(object):
                 overrides = self._scenario_hparam_overrides.get(key_to)
         if overrides:
             combined.update(overrides)
+        self._apply_backbone_overrides(combined)
         self.hparams = combined
         return self.hparams
+
+    def _apply_backbone_overrides(self, hparams):
+        """Reset dataset backbone params to defaults, then apply overrides if provided."""
+        for attr, value in self._dataset_backbone_defaults.items():
+            setattr(self.dataset_configs, attr, deepcopy(value))
+        for attr in self._backbone_attr_names:
+            if attr in hparams:
+                setattr(self.dataset_configs, attr, deepcopy(hparams[attr]))
 
     def get_tta_model_class(self): #获取指定的 TTA 模型类
         tta_model_class = get_algorithm_class(self.da_method)

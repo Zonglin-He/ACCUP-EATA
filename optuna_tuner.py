@@ -251,6 +251,59 @@ def suggest_accup_params(
     return suggestions
 
 
+def suggest_timesnet_params(trial: optuna.Trial, dataset_cfg) -> Dict[str, Any]:
+    """Define a lightweight search space for TimesNet backbone hyperparameters."""
+    seq_len = getattr(dataset_cfg, "sequence_len", 512)
+    max_patch = max(4, min(seq_len // 2, 512))
+    hidden_default = int(getattr(dataset_cfg, "times_hidden_channels", 128))
+    layers_default = int(getattr(dataset_cfg, "times_num_layers", 3))
+    dropout_default = float(getattr(dataset_cfg, "times_dropout", 0.1))
+    ffn_default = float(getattr(dataset_cfg, "times_ffn_expansion", 2.0))
+
+    hidden = trial.suggest_int(
+        "times_hidden_channels",
+        max(32, hidden_default // 2),
+        min(512, max(hidden_default * 2, 64)),
+        step=32,
+    )
+    num_layers = trial.suggest_int("times_num_layers", 2, max(2, layers_default + 3))
+    dropout = trial.suggest_float(
+        "times_dropout",
+        max(0.01, dropout_default / 2),
+        min(0.6, dropout_default * 2.5),
+    )
+    ffn_expansion = trial.suggest_float(
+        "times_ffn_expansion",
+        max(1.2, ffn_default / 2),
+        min(4.0, ffn_default * 2),
+    )
+
+    base_patch = trial.suggest_int(
+        "times_patch_base",
+        4,
+        max(4, min(96, max_patch)),
+        step=4,
+    )
+    patch_scale = trial.suggest_float("times_patch_scale", 1.3, 2.8)
+    patch_count = trial.suggest_int("times_patch_count", 2, 4)
+    patch_lens = []
+    current = base_patch
+    for _ in range(patch_count):
+        patch_lens.append(int(max(2, min(max_patch, round(current)))))
+        current *= patch_scale
+    patch_lens = sorted({p for p in patch_lens if p > 1})
+    if not patch_lens:
+        patch_lens = [max(2, base_patch)]
+
+    return {
+        "times_hidden_channels": hidden,
+        "times_num_layers": num_layers,
+        "times_dropout": dropout,
+        "times_ffn_expansion": ffn_expansion,
+        "times_patch_lens": patch_lens,
+    }
+
+
 def build_search_space(
     trial: optuna.Trial,
     method: str,
@@ -409,6 +462,8 @@ def objective(trial: optuna.Trial, args: argparse.Namespace, scenario: Tuple[str
         base_hparams,
         dict(trainer._train_params),
     )
+    if args.backbone.lower() == "timesnet":
+        trial_hparams.update(suggest_timesnet_params(trial, trainer.dataset_configs))
 
     scenario_key = (str(src_id), str(trg_id))
     overrides = dict(trainer._scenario_hparam_overrides.get(scenario_key, {}))
