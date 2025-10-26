@@ -1,7 +1,15 @@
-import sys
-sys.path.append('../ADATIME')
-
 import os
+import sys
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+ADATIME_PATH = os.path.abspath(os.path.join(PROJECT_ROOT, 'ADATIME'))
+if ADATIME_PATH not in sys.path:
+    sys.path.append(ADATIME_PATH)
+
 import pandas as pd
 import torch
 import collections
@@ -180,9 +188,31 @@ if __name__ == "__main__":
     # ========= Select the BACKBONE ==============
     parser.add_argument('--backbone', default='TimesNet', type=str, help='Backbone of choice: (CNN - RESNET18 - TCN)')
     # ========= Experiment settings ===============
-    parser.add_argument('--num_runs', default=3, type=int, help='Number of consecutive run with different seeds')
-    parser.add_argument('--device', default="cuda", type=str, help='cpu or cuda')
+parser.add_argument('--num_runs', default=3, type=int, help='Number of consecutive run with different seeds')
+parser.add_argument('--device', default="cuda", type=str, help='cpu or cuda')
+parser.add_argument(
+    '--scenario',
+    action='append',
+    default=None,
+    help=(
+        "Optional src->trg scenario filter. "
+        "Example: --scenario 7->18 --scenario 16->1. "
+        "If omitted, all dataset-defined scenarios will be evaluated."
+    ),
+)
 
-    args = parser.parse_args()
-    trainer = TTATrainer(args)
-    trainer.test_time_adaptation()
+args = parser.parse_args()
+trainer = TTATrainer(args)
+if args.scenario:
+    selected_pairs = []
+    for entry in args.scenario:
+        if '->' in entry:
+            src, trg = entry.split('->', 1)
+        elif ',' in entry:
+            src, trg = entry.split(',', 1)
+        else:
+            raise ValueError(f"Invalid scenario format '{entry}'. Expected 'src->trg'.")
+        selected_pairs.append((src.strip(), trg.strip()))
+    trainer.dataset_configs.scenarios = selected_pairs
+
+trainer.test_time_adaptation()
