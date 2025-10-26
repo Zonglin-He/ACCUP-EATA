@@ -36,7 +36,9 @@ class TimesBlock(nn.Module):
         self.post_norm = nn.BatchNorm1d(channels)
         self.dropout = nn.Dropout(dropout)
 
-        ffn_channels = max(channels * ffn_expansion, channels)
+        ffn_multiplier = max(1.0, float(ffn_expansion))
+        ffn_channels = int(max(channels, round(channels * ffn_multiplier)))
+        ffn_channels = max(1, ffn_channels)
         self.ffn = nn.Sequential(
             nn.Conv1d(channels, ffn_channels, kernel_size=1),
             nn.GELU(),
