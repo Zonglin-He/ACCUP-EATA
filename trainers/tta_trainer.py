@@ -188,17 +188,17 @@ if __name__ == "__main__":
     # ========= Select the BACKBONE ==============
     parser.add_argument('--backbone', default='TimesNet', type=str, help='Backbone of choice: (CNN - RESNET18 - TCN)')
     # ========= Experiment settings ===============
-parser.add_argument('--num_runs', default=3, type=int, help='Number of consecutive run with different seeds')
-parser.add_argument('--device', default="cuda", type=str, help='cpu or cuda')
-parser.add_argument(
-    '--scenario',
-    action='append',
-    default=None,
-    help=(
-        "Optional src->trg scenario filter. "
-        "Example: --scenario 7->18 --scenario 16->1. "
-        "If omitted, all dataset-defined scenarios will be evaluated."
-    ),
+    parser.add_argument('--num_runs', default=3, type=int, help='Number of consecutive run with different seeds')
+    parser.add_argument('--device', default="cuda", type=str, help='cpu or cuda')
+    parser.add_argument(
+        '--scenario',
+        action='append',
+        default=None,
+        help=(
+            "Optional src->trg scenario filter. "
+            "Example: --scenario 7->18 --scenario 16->1. "
+            "If omitted, all dataset-defined scenarios will be evaluated."
+        ),
 )
 
 args = parser.parse_args()
