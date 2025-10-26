@@ -201,18 +201,18 @@ if __name__ == "__main__":
         ),
 )
 
-args = parser.parse_args()
-trainer = TTATrainer(args)
-if args.scenario:
-    selected_pairs = []
-    for entry in args.scenario:
-        if '->' in entry:
-            src, trg = entry.split('->', 1)
-        elif ',' in entry:
-            src, trg = entry.split(',', 1)
-        else:
-            raise ValueError(f"Invalid scenario format '{entry}'. Expected 'src->trg'.")
-        selected_pairs.append((src.strip(), trg.strip()))
-    trainer.dataset_configs.scenarios = selected_pairs
+    args = parser.parse_args()
+    trainer = TTATrainer(args)
+    if args.scenario:
+        selected_pairs = []
+        for entry in args.scenario:
+            if '->' in entry:
+                src, trg = entry.split('->', 1)
+            elif ',' in entry:
+                src, trg = entry.split(',', 1)
+            else:
+                raise ValueError(f"Invalid scenario format '{entry}'. Expected 'src->trg'.")
+            selected_pairs.append((src.strip(), trg.strip()))
+        trainer.dataset_configs.scenarios = selected_pairs
 
-trainer.test_time_adaptation()
+    trainer.test_time_adaptation()
