@@ -339,9 +339,7 @@ class EEG():
                 'train_classifier': True,
                 'freeze_bn_stats': False,
 
-                'scenario_overrides': {
-                    # ('src_id', 'trg_id'): {'learning_rate': 5e-4, 'tau': 12},
-                },
+                'scenario_overrides': dict(EEG_ACCUP_SCENARIO_OVERRIDES),
 
                 'grad_clip': 0.5,
                 'grad_clip_value': None
