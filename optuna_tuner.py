@@ -201,6 +201,76 @@ def suggest_train_params(trial: optuna.Trial, train_params: Optional[Dict[str, A
     return suggestions
 
 
+def _suggest_training_scope(trial: optuna.Trial) -> Dict[str, Any]:
+    """
+    Sample a coherent training scope configuration so Optuna does not
+    explore self-contradictory combinations (e.g., full backbone + frozen BN).
+    """
+    scope = trial.suggest_categorical("train_scope", ["bn_only", "partial", "full"])
+    scope_params: Dict[str, Any] = {}
+
+    if scope == "bn_only":
+        scope_params["train_full_backbone"] = False
+        scope_params["train_classifier"] = False
+        scope_params["train_backbone_modules"] = None
+        scope_params["freeze_bn_stats"] = trial.suggest_categorical(
+            "freeze_bn_stats_bn_only", [True, False]
+        )
+        scope_params["filter_K"] = trial.suggest_int("filter_K_bn_only", 5, 17, step=2)
+        scope_params["safety_keep_frac"] = trial.suggest_float(
+            "safety_keep_frac_bn_only", 0.05, 0.4
+        )
+        scope_params["grad_clip"] = trial.suggest_float("grad_clip_bn_only", 0.1, 0.7)
+        scope_params["grad_clip_value"] = trial.suggest_categorical(
+            "grad_clip_value_bn_only", [None, 0.05, 0.1]
+        )
+        return scope_params
+
+    if scope == "partial":
+        scope_params["train_full_backbone"] = False
+        scope_params["train_classifier"] = trial.suggest_categorical(
+            "train_classifier_partial", [False, True]
+        )
+        module_choice = trial.suggest_categorical(
+            "partial_module_bundle",
+            ["conv1", "conv12", "conv123"],
+        )
+        partial_map = {
+            "conv1": ["conv_block1"],
+            "conv12": ["conv_block1", "conv_block2"],
+            "conv123": ["conv_block1", "conv_block2", "conv_block3"],
+        }
+        scope_params["train_backbone_modules"] = partial_map[module_choice]
+        scope_params["freeze_bn_stats"] = trial.suggest_categorical(
+            "freeze_bn_stats_partial", [True, False]
+        )
+        scope_params["filter_K"] = trial.suggest_int("filter_K_partial", 7, 25, step=2)
+        scope_params["safety_keep_frac"] = trial.suggest_float(
+            "safety_keep_frac_partial", 0.15, 0.65
+        )
+        scope_params["grad_clip"] = trial.suggest_float("grad_clip_partial", 0.2, 1.0)
+        scope_params["grad_clip_value"] = trial.suggest_categorical(
+            "grad_clip_value_partial", [None, 0.05, 0.1, 0.25]
+        )
+        return scope_params
+
+    # full scope
+    scope_params["train_full_backbone"] = True
+    scope_params["train_classifier"] = True
+    scope_params["train_backbone_modules"] = None
+    # 当全骨干参与训练时，强制 BN 追踪目标域统计
+    scope_params["freeze_bn_stats"] = False
+    scope_params["filter_K"] = trial.suggest_int("filter_K_full", 9, 33, step=2)
+    scope_params["safety_keep_frac"] = trial.suggest_float(
+        "safety_keep_frac_full", 0.3, 0.9
+    )
+    scope_params["grad_clip"] = trial.suggest_float("grad_clip_full", 0.35, 1.5)
+    scope_params["grad_clip_value"] = trial.suggest_categorical(
+        "grad_clip_value_full", [0.1, 0.25, 0.5, 1.0]
+    )
+    return scope_params
+
+
 def suggest_accup_params(
     trial: optuna.Trial,
     base_hparams: Dict[str, float],
@@ -210,13 +280,11 @@ def suggest_accup_params(
     suggestions = {
         "learning_rate": trial.suggest_float("learning_rate", 1e-5, 5e-4, log=True),
         "pre_learning_rate": trial.suggest_float("pre_learning_rate", 1e-5, 5e-4, log=True),
-        "filter_K": trial.suggest_int("filter_K", 5, 33, step=2),
         "tau": trial.suggest_int("tau", 5, 30),
         "temperature": trial.suggest_float("temperature", 0.3, 3.0),
         "warmup_min": trial.suggest_int("warmup_min", 8, 320),
         "quantile": trial.suggest_float("quantile", 0.1, 0.9),
         "use_quantile": trial.suggest_categorical("use_quantile", [True, False]),
-        "safety_keep_frac": trial.suggest_float("safety_keep_frac", 0.05, 0.9),
         "lambda_eata": trial.suggest_float("lambda_eata", 0.5, 2.5),
         "e_margin_scale": trial.suggest_float("e_margin_scale", 0.2, 0.9),
         "d_margin": trial.suggest_float("d_margin", 0.0, 0.15),
@@ -229,13 +297,6 @@ def suggest_accup_params(
         "max_fisher_updates": trial.suggest_categorical(
             "max_fisher_updates", [-1, 32, 64, 128, 256, 512, 1024]
         ),
-        "train_full_backbone": trial.suggest_categorical("train_full_backbone", [True, False]),
-        "train_classifier": trial.suggest_categorical("train_classifier", [True, False]),
-        "freeze_bn_stats": trial.suggest_categorical("freeze_bn_stats", [True, False]),
-        "grad_clip": trial.suggest_float("grad_clip", 0.1, 1.5),
-        "grad_clip_value": trial.suggest_categorical(
-            "grad_clip_value", [None, 0.05, 0.1, 0.25, 0.5, 1.0]
-        ),
     }
 
     # Keep values within sensible bounds around the defaults if available.
@@ -244,6 +305,8 @@ def suggest_accup_params(
         lo = max(0.1, default_temp * 0.5)
         hi = default_temp * 2.5
         suggestions["temperature"] = trial.suggest_float("temperature", lo, hi)
+
+    suggestions.update(_suggest_training_scope(trial))
 
     if train_params:
         suggestions.update(suggest_train_params(trial, train_params))
