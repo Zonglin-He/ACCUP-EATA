@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import sys
 
@@ -35,6 +37,11 @@ class TTATrainer(TTAAbstractTrainer):
         super(TTATrainer, self).__init__(args)
         self.seed = getattr(args, "seed", 42)
         fix_randomness(self.seed)
+        self.pretrain_cache_dir = getattr(args, "pretrain_cache_dir", None)
+        if self.pretrain_cache_dir:
+            self.pretrain_cache_dir = os.path.abspath(self.pretrain_cache_dir)
+            os.makedirs(self.pretrain_cache_dir, exist_ok=True)
+        self._current_scenario = None
         self.exp_log_dir = os.path.join(
             self.home_path,
             self.save_dir,
@@ -70,6 +77,7 @@ class TTATrainer(TTAAbstractTrainer):
 
         for src_id, trg_id in self.dataset_configs.scenarios:
             self.set_scenario_hparams(src_id, trg_id)
+            self._current_scenario = (str(src_id), str(trg_id))
             scenario = f"{src_id}_to_{trg_id}"
             cur_scenario_f1_ret = []
             cur_scenario_metrics = []
@@ -174,6 +182,60 @@ class TTATrainer(TTAAbstractTrainer):
         self.save_tables_to_file(table_risks, datetime.now().strftime('%d_%m_%Y_%H_%M_%S') + '_risks')
 
         self.summary_f1_scores.close()
+
+    def _pretrain_cache_path(self):
+        if not self.pretrain_cache_dir or not self._current_scenario:
+            return None
+        signature = {
+            "dataset": self.dataset,
+            "backbone": self.backbone,
+            "src": self._current_scenario[0],
+        }
+        pretrain_keys = [
+            "pre_learning_rate",
+            "num_epochs",
+            "batch_size",
+            "weight_decay",
+            "step_size",
+            "lr_decay",
+            "steps",
+            "momentum",
+            "optim_method",
+        ]
+        signature.update({key: self.hparams.get(key) for key in pretrain_keys if key in self.hparams})
+        backbone_overrides = {
+            attr: getattr(self.dataset_configs, attr)
+            for attr in getattr(self, "_backbone_attr_names", [])
+            if hasattr(self.dataset_configs, attr)
+        }
+        signature["backbone_overrides"] = backbone_overrides
+        digest = hashlib.md5(json.dumps(signature, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        filename = f"{self.dataset}_{self.backbone}_src{self._current_scenario[0]}_{digest}.pt"
+        return os.path.join(self.pretrain_cache_dir, filename)
+
+    def pre_train(self):
+        cache_path = self._pretrain_cache_path()
+        if cache_path and os.path.exists(cache_path):
+            print(f"Loading cached pre-training weights from {cache_path}")
+            payload = torch.load(cache_path, map_location=self.device)
+            cached_model = self.initialize_pretrained_model()
+            cached_model.load_state_dict(payload["model_state"])
+            cached_model = cached_model.to(self.device)
+            return payload["non_adapted"], cached_model
+
+        non_adapted_model_state, pre_trained_model = super(TTATrainer, self).pre_train()
+
+        if cache_path:
+            torch.save(
+                {
+                    "non_adapted": non_adapted_model_state,
+                    "model_state": pre_trained_model.state_dict(),
+                },
+                cache_path,
+            )
+            print(f"Cached pre-training weights at {cache_path}")
+
+        return non_adapted_model_state, pre_trained_model
 
 
 if __name__ == "__main__":

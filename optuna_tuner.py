@@ -39,6 +39,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--pruner', default='none', choices=['none', 'median', 'hyperband'])
     parser.add_argument('--resume', action='store_true', help="Resume the Optuna study if it already exists.")
 
+    parser.add_argument(
+        '--tune-train-params',
+        action='store_true',
+        help="Allow Optuna to explore pre-training hyperparameters (slower trials).",
+    )
+    parser.add_argument(
+        '--pretrain-cache-dir',
+        type=str,
+        default='results/pretrain_cache',
+        help="Directory for storing/reusing pre-training checkpoints across trials.",
+    )
+    parser.add_argument(
+        '--disable-pretrain-cache',
+        action='store_true',
+        help="Force every trial to run pre-training from scratch (ignore cache).",
+    )
+
     # Visualization
     parser.add_argument('--viz-dir', type=str, default=None, help="If set, export Optuna plots (HTML) to this directory.")
 
@@ -496,6 +513,7 @@ def update_scenario_overrides(
 
 def make_trainer_args(args: argparse.Namespace, trial_number: int) -> Namespace:
     """Build a Namespace compatible with TTATrainer from high-level CLI arguments."""
+    cache_dir = None if args.disable_pretrain_cache else args.pretrain_cache_dir
     return Namespace(
         save_dir=args.save_dir,
         exp_name=f"{args.exp_name}_trial{trial_number}",
@@ -506,6 +524,7 @@ def make_trainer_args(args: argparse.Namespace, trial_number: int) -> Namespace:
         num_runs=args.num_runs,
         device=args.device,
         seed=args.seed,
+        pretrain_cache_dir=cache_dir,
     )
 
 
@@ -523,7 +542,7 @@ def objective(trial: optuna.Trial, args: argparse.Namespace, scenario: Tuple[str
         trial,
         args.da_method,
         base_hparams,
-        dict(trainer._train_params),
+        dict(trainer._train_params) if args.tune_train_params else None,
     )
     if args.backbone.lower() == "timesnet":
         trial_hparams.update(suggest_timesnet_params(trial, trainer.dataset_configs))
