@@ -12,12 +12,20 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, Iterable, List
 
-import optuna_tuner
+import sys
 
 # ------------------------------------------------------------------------------
 # Server-specific paths --------------------------------------------------------
 # ------------------------------------------------------------------------------
 REPO_ROOT = Path("/data/coding/accup-eata")  # Repository checkout on FunHPC
+
+# Ensure repository modules are importable when running from scripts/.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+import optuna_tuner
+
+# ------------------------------------------------------------------------------
 DATA_ROOT = Path("/data/coding/accup-eata/data/Dataset")  # Folder containing EEG data
 SAVE_ROOT = REPO_ROOT / "results" / "tta_experiments_logs"
 PRETRAIN_CACHE = REPO_ROOT / "results" / "pretrain_cache"
