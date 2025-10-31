@@ -43,8 +43,8 @@ def run_pair(src: int, trg: int):
         str(PYTHON_BIN),
         "optuna_tuner.py",
         # 注意：下面两个参数名要和 optuna_tuner.py 的 argparse 完全一致
-        "--data_path",        str(DATA_ROOT),         # 如果脚本用 --data-path，请把下划线改成连字符
-        "--save_dir",         str(SAVE_ROOT),         # 同理：--save-dir / --save_dir 取决于你的脚本
+        "--data-path",        str(DATA_ROOT),         # 如果脚本用 --data-path，请把下划线改成连字符
+        "--save-dir",         str(SAVE_ROOT),         # 同理：--save-dir / --save_dir 取决于你的脚本
         "--pretrain-cache-dir", str(PRETRAIN_CACHE),
         "--study-name",       study_name,
         "--storage",          f"sqlite:///{STUDY_DB}",
