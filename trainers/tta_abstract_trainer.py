@@ -103,26 +103,25 @@ class TTAAbstractTrainer(object):
         return non_adapted_model_state, pre_trained_model
 
     def evaluate(self, test_loader, tta_model):
-        #评估函数：对给定 test_loader 上的模型 tta_model 计算损失和收集预测
-        total_loss, preds_list, labels_list = [], [], [] #用于储存损失，预测值，标签的列表
+        """Run evaluation and keep cached tensors on CPU to avoid GPU bloat."""
+        total_loss, preds_list, labels_list = [], [], []
 
-        for data, labels, trg_idx in test_loader: #遍历测试数据
-            if isinstance(data, list): #如果数据是列表
-                data = [data[i].float().to(self.device) for i in range(len(data))] #将每个元素转换为浮点型并移动到指定设备
+        for data, labels, trg_idx in test_loader:
+            if isinstance(data, list):
+                data = [tensor.float().to(self.device) for tensor in data]
             else:
-                data = data.float().to(self.device) #否则直接转换为浮点型并移动到设备
-            labels = labels.view((-1)).long().to(self.device) #调整标签形状并转换为Long
+                data = data.float().to(self.device)
+            labels = labels.view(-1).long().to(self.device)
 
-            predictions = tta_model(data) #通过模型获取预测值
-            loss = F.cross_entropy(predictions, labels) #计算交叉熵损失
-            total_loss.append(loss.item()) #将损失值添加到列表中
-            pred = predictions.detach()  #分离预测值以防止梯度计算
-            preds_list.append(pred) #将预测值添加到列表中
-            labels_list.append(labels) #将标签添加到列表中
+            predictions = tta_model(data)
+            loss = F.cross_entropy(predictions, labels)
+            total_loss.append(loss.item())
+            preds_list.append(predictions.detach().cpu())
+            labels_list.append(labels.cpu())
 
-        self.loss = torch.tensor(total_loss).mean() #计算平均损失
-        self.full_preds = torch.cat((preds_list)) #连接所有预测值
-        self.full_labels = torch.cat((labels_list)) #连接所有标签
+        self.loss = torch.tensor(total_loss, dtype=torch.float32).mean()
+        self.full_preds = torch.cat(preds_list)
+        self.full_labels = torch.cat(labels_list)
 
     def get_configs(self): #获取当前数据集对应的配置类实例和超参数类实例
         dataset_class = get_dataset_class(self.dataset)
@@ -189,9 +188,16 @@ class TTAAbstractTrainer(object):
         trg_risk = self.loss.item()
 
         # calculate metrics
-        acc = self.ACC(self.full_preds.argmax(dim=1).cpu(), self.full_labels.cpu()).item()
-        f1 = self.F1(self.full_preds.argmax(dim=1).cpu(), self.full_labels.cpu()).item()
-        auroc = self.AUROC(self.full_preds.cpu(), self.full_labels.cpu()).item()
+        preds_cpu = self.full_preds if self.full_preds.device.type == 'cpu' else self.full_preds.cpu()
+        labels_cpu = self.full_labels if self.full_labels.device.type == 'cpu' else self.full_labels.cpu()
+        pred_labels = preds_cpu.argmax(dim=1)
+
+        acc = self.ACC(pred_labels, labels_cpu).item()
+        f1 = self.F1(pred_labels, labels_cpu).item()
+        auroc = self.AUROC(preds_cpu, labels_cpu).item()
+        self.ACC.reset()
+        self.F1.reset()
+        self.AUROC.reset()
 
         risks = src_risk, trg_risk
         metrics = acc, f1, auroc
@@ -259,11 +265,18 @@ class TTAAbstractTrainer(object):
         wandb.log(summary_risks)
 
     def calculate_metrics(self, tta_model):
-        # 计算适应后模型在整个目标域数据上的指标
+        # ������Ӧ��ģ��������Ŀ���������ϵ�ָ��
         self.evaluate(self.trg_whole_dl, tta_model)
-        acc = self.ACC(self.full_preds.argmax(dim=1).cpu(), self.full_labels.cpu()).item()
-        f1 = self.F1(self.full_preds.argmax(dim=1).cpu(), self.full_labels.cpu()).item()
-        auroc = self.AUROC(self.full_preds.cpu(), self.full_labels.cpu()).item()
+        preds_cpu = self.full_preds if self.full_preds.device.type == 'cpu' else self.full_preds.cpu()
+        labels_cpu = self.full_labels if self.full_labels.device.type == 'cpu' else self.full_labels.cpu()
+        pred_labels = preds_cpu.argmax(dim=1)
+
+        acc = self.ACC(pred_labels, labels_cpu).item()
+        f1 = self.F1(pred_labels, labels_cpu).item()
+        auroc = self.AUROC(preds_cpu, labels_cpu).item()
+        self.ACC.reset()
+        self.F1.reset()
+        self.AUROC.reset()
         trg_risk = self.loss.item()
 
         return acc, f1, auroc, trg_risk
