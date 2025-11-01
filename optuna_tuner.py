@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Tuple, Optional
 
 import optuna
+import torch
 
 from trainers.tta_trainer import TTATrainer
 from configs.data_model_configs import get_dataset_class
@@ -26,6 +27,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--num-runs', default=1, type=int)
     parser.add_argument('--device', default='cuda', type=str)
     parser.add_argument('--seed', default=42, type=int)
+    parser.add_argument(
+        '--batch-size',
+        type=int,
+        default=None,
+        help="Override the dataloader batch size before launching trials.",
+    )
 
     # Scenario selection
     parser.add_argument('--src-id', type=str, default=None, help="Source domain ID to adapt from.")
@@ -531,6 +538,10 @@ def make_trainer_args(args: argparse.Namespace, trial_number: int) -> Namespace:
 def objective(trial: optuna.Trial, args: argparse.Namespace, scenario: Tuple[str, str]) -> float:
     trainer_args = make_trainer_args(args, trial.number)
     trainer = TTATrainer(trainer_args)
+    if args.batch_size is not None:
+        batch_size_override = int(args.batch_size)
+        trainer._train_params['batch_size'] = batch_size_override
+        trainer.hparams['batch_size'] = batch_size_override
 
     # Limit to the requested scenario
     src_id, trg_id = scenario
@@ -553,7 +564,18 @@ def objective(trial: optuna.Trial, args: argparse.Namespace, scenario: Tuple[str
     trainer._scenario_hparam_overrides[scenario_key] = overrides
     trainer.hparams.update(trial_hparams)
 
-    trainer.test_time_adaptation()
+    try:
+        trainer.test_time_adaptation()
+    except RuntimeError as exc:
+        message = str(exc).lower()
+        if "out of memory" in message:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            raise optuna.exceptions.TrialPruned("CUDA out of memory during adaptation") from exc
+        raise
+    finally:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     metrics = trainer.scenario_metrics.get(scenario_key)
     if metrics is None:
