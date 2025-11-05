@@ -248,7 +248,7 @@ if __name__ == "__main__":
     parser.add_argument('--data_path', default=r'E:\Dataset', type=str, help='Path containing dataset')
     parser.add_argument('--dataset', default='EEG', type=str, help='Dataset of choice: (WISDM - EEG - HAR - HHAR_SA)')
     # ========= Select the BACKBONE ==============
-    parser.add_argument('--backbone', default='TimesNet', type=str, help='Backbone of choice: (CNN - RESNET18 - TCN)')
+    parser.add_argument('--backbone', default='CNN', type=str, help='Backbone of choice: (CNN - RESNET18 - TCN)')
     # ========= Experiment settings ===============
     parser.add_argument('--num_runs', default=3, type=int, help='Number of consecutive run with different seeds')
     parser.add_argument('--device', default="cuda", type=str, help='cpu or cuda')
