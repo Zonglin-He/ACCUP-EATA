@@ -628,8 +628,16 @@ def main():
             key=lambda t: t.value if t.value is not None else float("-inf"),
         )
         print(f"Best F1 for scenario {scenario_key}: {best.value:.4f}")
-        print("Best params:")
-        for k, v in best.params.items():
+        sanitized_params = {
+            k[len("hparam_"):]: v
+            for k, v in (best.user_attrs or {}).items()
+            if k.startswith("hparam_")
+        }
+        if not sanitized_params:
+            sanitized_params = dict(best.params)
+
+        print("Best params (applied to trainer):")
+        for k, v in sanitized_params.items():
             print(f"  {k}: {v}")
         print("Recorded metrics:")
         for k, v in (best.user_attrs.get("metrics") or {}).items():
@@ -654,7 +662,7 @@ def main():
                 "study_name": study.study_name,
                 "trial_number": best.number,
                 "objective_value": float(best.value) if best.value is not None else None,
-                "params": to_jsonable(best.params),
+                "params": to_jsonable(sanitized_params),
                 "metrics": to_jsonable(best.user_attrs.get("metrics")),
             }
 
@@ -668,7 +676,7 @@ def main():
                 args.dataset,
                 args.da_method,
                 scenario,
-                best.params,
+                sanitized_params,
             )
             print(
                 "Updated "
