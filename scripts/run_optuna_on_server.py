@@ -8,6 +8,7 @@ your environment before executing.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, Iterable, List
@@ -17,7 +18,7 @@ import sys
 # ------------------------------------------------------------------------------
 # Server-specific paths --------------------------------------------------------
 # ------------------------------------------------------------------------------
-REPO_ROOT = Path("/data/coding/accup-eata")  # Repository checkout on FunHPC
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Ensure repository modules are importable when running from scripts/.
 if str(REPO_ROOT) not in sys.path:
@@ -26,7 +27,8 @@ if str(REPO_ROOT) not in sys.path:
 import optuna_tuner
 
 # ------------------------------------------------------------------------------
-DATA_ROOT = Path("/data/coding/accup-eata/data/Dataset")  # Folder containing EEG data
+DEFAULT_DATA_ROOT = REPO_ROOT / "data" / "Dataset"
+DATA_ROOT = Path(os.environ.get("TTA_DATA_ROOT", DEFAULT_DATA_ROOT))
 SAVE_ROOT = REPO_ROOT / "results" / "tta_experiments_logs"
 PRETRAIN_CACHE = REPO_ROOT / "results" / "pretrain_cache"
 STUDY_DB = REPO_ROOT / "optuna.db"
@@ -35,18 +37,17 @@ STUDY_DB = REPO_ROOT / "optuna.db"
 # Search scenarios and shared options -----------------------------------------
 # ------------------------------------------------------------------------------
 PAIRS: List[Dict[str, int]] = [
-    {"src": 0, "trg": 11},
-    {"src": 7, "trg": 18},
-    {"src": 9, "trg": 14},
+    {"src": 1, "trg": 0},
+    {"src": 2, "trg": 3},
 ]
 
 N_TRIALS = 40
 RESUME_STUDY = True
 
 DA_METHOD = "ACCUP"
-DATASET = "EEG"
-BACKBONE = "TimesNet"
-NUM_RUNS = 1
+DATASET = "FD"
+BACKBONE = "CNN"
+NUM_RUNS = 2
 DEVICE = "cuda"
 SEED = 42
 
@@ -59,10 +60,10 @@ def ensure_directories() -> None:
 
 def build_args(src: int, trg: int) -> SimpleNamespace:
     """Construct the Namespace that optuna_tuner.main() expects."""
-    study_name = f"tta_optuna_s{src}_t{trg}"
+    study_name = f"fd_cnn_s{src}_t{trg}"
     return SimpleNamespace(
         save_dir=str(SAVE_ROOT),
-        exp_name="optuna",
+        exp_name="fd_cnn",
         da_method=DA_METHOD,
         data_path=str(DATA_ROOT),
         dataset=DATASET,
@@ -78,13 +79,13 @@ def build_args(src: int, trg: int) -> SimpleNamespace:
         n_trials=N_TRIALS,
         pruner="none",
         resume=RESUME_STUDY,
-        tune_train_params=False,
+        tune_train_params=True,
         pretrain_cache_dir=str(PRETRAIN_CACHE),
         disable_pretrain_cache=False,
         viz_dir=None,
         best_summary_path=None,
-        write_overrides=False,
-        overrides_config="configs/tta_hparams_new.py",
+        write_overrides=True,
+        overrides_config=str(REPO_ROOT / "configs" / "tta_hparams_new.py"),
     )
 
 

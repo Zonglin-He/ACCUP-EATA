@@ -66,6 +66,7 @@ class TTAAbstractTrainer(object):
             "times_dropout",
             "times_ffn_expansion",
         )
+        self._backbone_key = str(self.backbone)
         self._dataset_backbone_defaults = {
             attr: deepcopy(getattr(self.dataset_configs, attr))
             for attr in self._backbone_attr_names
@@ -128,22 +129,53 @@ class TTAAbstractTrainer(object):
         hparams_class = get_hparams_class(self.dataset)
         return dataset_class(), hparams_class()
 
+    def _scenario_override_candidates(self, src_id, trg_id):
+        """Yield candidate keys for scenario overrides ordered by backbone specificity."""
+        src = str(src_id)
+        trg = str(trg_id)
+        backbone = self._backbone_key
+        backbone_variants = {backbone, backbone.lower(), backbone.upper()}
+
+        for name in backbone_variants:
+            yield (name, src, trg)
+        for name in backbone_variants:
+            yield f"{name}:{src}->{trg}"
+        yield (src, trg)
+        yield f"{src}->{trg}"
+        yield f"{src}_to_{trg}"
+
+    def _scenario_override_storage_key(self, src_id, trg_id):
+        """Return the canonical storage key for overrides tied to the active backbone."""
+        return (self._backbone_key, str(src_id), str(trg_id))
+
+    def _resolve_scenario_override(self, src_id, trg_id):
+        """Lookup overrides for the given scenario honoring backbone-specific entries."""
+        for candidate in self._scenario_override_candidates(src_id, trg_id):
+            if candidate in self._scenario_hparam_overrides:
+                payload = self._scenario_hparam_overrides.get(candidate, {})
+                return dict(payload) if isinstance(payload, dict) else {}, candidate
+        return {}, None
+
+    def get_scenario_override(self, src_id, trg_id):
+        """Expose read-only view of the merged override for the given scenario."""
+        overrides, _ = self._resolve_scenario_override(src_id, trg_id)
+        return overrides
+
+    def store_scenario_override(self, src_id, trg_id, overrides):
+        """Persist overrides under the backbone-aware key without mutating base configs."""
+        key = self._scenario_override_storage_key(src_id, trg_id)
+        existing = dict(self._scenario_hparam_overrides.get(key, {}))
+        existing.update(overrides or {})
+        self._scenario_hparam_overrides[key] = existing
+        return key
+
     def set_scenario_hparams(self, src_id, trg_id):
         """
         Refresh active hyperparameters for a specific source→target scenario.
         Allows per-scenario tuning by merging overrides on top of base + train params.
         """
         combined = {**self._base_alg_hparams, **self._train_params}
-        overrides = {}
-        if isinstance(self._scenario_hparam_overrides, dict):
-            key_tuple = (str(src_id), str(trg_id))
-            overrides = self._scenario_hparam_overrides.get(key_tuple)
-            if overrides is None:
-                key_arrow = f"{src_id}->{trg_id}"
-                overrides = self._scenario_hparam_overrides.get(key_arrow)
-            if overrides is None:
-                key_to = f"{src_id}_to_{trg_id}"
-                overrides = self._scenario_hparam_overrides.get(key_to)
+        overrides, _ = self._resolve_scenario_override(src_id, trg_id)
         if overrides:
             combined.update(overrides)
         self._apply_backbone_overrides(combined)

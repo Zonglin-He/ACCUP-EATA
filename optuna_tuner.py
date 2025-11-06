@@ -431,26 +431,45 @@ def _format_scenario_component(value: Any) -> str:
     return repr(str(value))
 
 
-def _scenario_sort_key(key: Tuple[str, str]) -> Tuple[Any, Any]:
+def _scenario_sort_key(key) -> Tuple[Any, ...]:
     def _component(val: str):
         if _is_int_like(val):
             return 0, int(val)
         return 1, str(val)
 
-    return _component(key[0]), _component(key[1])
+    if isinstance(key, tuple):
+        if len(key) == 3:
+            backbone = str(key[0])
+            return (0, backbone.lower(), _component(str(key[1])), _component(str(key[2])))
+        if len(key) == 2:
+            return (1, "", _component(str(key[0])), _component(str(key[1])))
+    return (2, str(key))
 
 
 def _render_overrides_block(
     var_name: str,
-    overrides: Dict[Tuple[str, str], Dict[str, Any]],
+    overrides: Dict[Any, Dict[str, Any]],
 ) -> str:
     lines = [f"{var_name} = {{"]  # opening brace
     items = sorted(overrides.items(), key=lambda item: _scenario_sort_key(item[0]))
     if items:
-        for idx, ((src, trg), params) in enumerate(items):
-            lines.append(
-                f"    scenario({_format_scenario_component(src)}, {_format_scenario_component(trg)}): {{"
-            )
+        for idx, (key, params) in enumerate(items):
+            if isinstance(key, tuple) and len(key) == 3:
+                backbone, src, trg = key
+                header = (
+                    f"    backbone_scenario("
+                    f"{_format_scenario_component(backbone)}, "
+                    f"{_format_scenario_component(src)}, "
+                    f"{_format_scenario_component(trg)}): {{"
+                )
+            elif isinstance(key, tuple) and len(key) == 2:
+                src, trg = key
+                header = (
+                    f"    scenario({_format_scenario_component(src)}, {_format_scenario_component(trg)}): {{"
+                )
+            else:
+                header = f"    {repr(str(key))}: {{"
+            lines.append(header)
             for param_name in sorted(params.keys()):
                 param_value = params[param_name]
                 lines.append(f"        '{param_name}': {repr(param_value)},")
@@ -499,6 +518,7 @@ def update_scenario_overrides(
     method: str,
     scenario: Tuple[str, str],
     params: Dict[str, Any],
+    backbone: Optional[str] = None,
 ):
     """Write/refresh the scenario overrides entry for a given dataset + method."""
     config_path = config_path.resolve()
@@ -511,7 +531,10 @@ def update_scenario_overrides(
     if current_overrides is None:
         raise RuntimeError(f"{var_name} not defined inside {config_path}")
 
-    normalized_key = (str(scenario[0]), str(scenario[1]))
+    if backbone:
+        normalized_key = (str(backbone), str(scenario[0]), str(scenario[1]))
+    else:
+        normalized_key = (str(scenario[0]), str(scenario[1]))
     merged = dict(current_overrides)
     merged[normalized_key] = dict(params)
     new_block = _render_overrides_block(var_name, merged)
@@ -538,8 +561,9 @@ def make_trainer_args(args: argparse.Namespace, trial_number: int) -> Namespace:
 def objective(trial: optuna.Trial, args: argparse.Namespace, scenario: Tuple[str, str]) -> float:
     trainer_args = make_trainer_args(args, trial.number)
     trainer = TTATrainer(trainer_args)
-    if args.batch_size is not None:
-        batch_size_override = int(args.batch_size)
+    batch_size_override = getattr(args, "batch_size", None)
+    if batch_size_override is not None:
+        batch_size_override = int(batch_size_override)
         trainer._train_params['batch_size'] = batch_size_override
         trainer.hparams['batch_size'] = batch_size_override
 
@@ -559,10 +583,11 @@ def objective(trial: optuna.Trial, args: argparse.Namespace, scenario: Tuple[str
         trial_hparams.update(suggest_timesnet_params(trial, trainer.dataset_configs))
 
     scenario_key = (str(src_id), str(trg_id))
-    overrides = dict(trainer._scenario_hparam_overrides.get(scenario_key, {}))
-    overrides.update(trial_hparams)
-    trainer._scenario_hparam_overrides[scenario_key] = overrides
-    trainer.hparams.update(trial_hparams)
+    existing_override = trainer.get_scenario_override(src_id, trg_id)
+    combined_override = dict(existing_override)
+    combined_override.update(trial_hparams)
+    trainer.store_scenario_override(src_id, trg_id, combined_override)
+    trainer.hparams.update(combined_override)
 
     try:
         trainer.test_time_adaptation()
@@ -677,6 +702,7 @@ def main():
                 args.da_method,
                 scenario,
                 sanitized_params,
+                backbone=args.backbone,
             )
             print(
                 "Updated "
