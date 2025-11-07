@@ -37,17 +37,20 @@ STUDY_DB = REPO_ROOT / "optuna.db"
 # Search scenarios and shared options -----------------------------------------
 # ------------------------------------------------------------------------------
 PAIRS: List[Dict[str, int]] = [
+    {"src": 0, "trg": 1},
+    {"src": 1, "trg": 2},
+    {"src": 3, "trg": 1},
     {"src": 1, "trg": 0},
     {"src": 2, "trg": 3},
 ]
 
-N_TRIALS = 40
+N_TRIALS = 70
 RESUME_STUDY = True
 
 DA_METHOD = "ACCUP"
 DATASET = "FD"
 BACKBONE = "CNN"
-NUM_RUNS = 2
+NUM_RUNS = 3
 DEVICE = "cuda"
 SEED = 42
 
