@@ -38,11 +38,10 @@ STUDY_DB = REPO_ROOT / "optuna.db"
 # Search scenarios and shared options -----------------------------------------
 # ------------------------------------------------------------------------------
 PAIRS: List[Dict[str, int]] = [
-    {"src": 7, "trg": 13},
     {"src": 9, "trg": 18},
 ]
 
-DEFAULT_N_TRIALS = 70
+DEFAULT_N_TRIALS = 80
 DEFAULT_RESUME = True
 
 DA_METHOD = "ACCUP"
