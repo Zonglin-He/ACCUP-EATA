@@ -8,6 +8,7 @@ your environment before executing.
 
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,18 +38,15 @@ STUDY_DB = REPO_ROOT / "optuna.db"
 # Search scenarios and shared options -----------------------------------------
 # ------------------------------------------------------------------------------
 PAIRS: List[Dict[str, int]] = [
-    {"src": 0, "trg": 1},
-    {"src": 1, "trg": 2},
-    {"src": 3, "trg": 1},
-    {"src": 1, "trg": 0},
-    {"src": 2, "trg": 3},
+    {"src": 7, "trg": 13},
+    {"src": 9, "trg": 18},
 ]
 
-N_TRIALS = 70
-RESUME_STUDY = True
+DEFAULT_N_TRIALS = 70
+DEFAULT_RESUME = True
 
 DA_METHOD = "ACCUP"
-DATASET = "FD"
+DATASET = "HAR"
 BACKBONE = "CNN"
 NUM_RUNS = 3
 DEVICE = "cuda"
@@ -61,12 +59,13 @@ def ensure_directories() -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
-def build_args(src: int, trg: int) -> SimpleNamespace:
+def build_args(src: int, trg: int, *, n_trials: int, resume: bool) -> SimpleNamespace:
     """Construct the Namespace that optuna_tuner.main() expects."""
-    study_name = f"fd_cnn_s{src}_t{trg}"
+    tag = f"{DATASET.lower()}_{BACKBONE.lower()}"
+    study_name = f"{tag}_s{src}_t{trg}"
     return SimpleNamespace(
         save_dir=str(SAVE_ROOT),
-        exp_name="fd_cnn",
+        exp_name=tag,
         da_method=DA_METHOD,
         data_path=str(DATA_ROOT),
         dataset=DATASET,
@@ -79,9 +78,9 @@ def build_args(src: int, trg: int) -> SimpleNamespace:
         study_name=study_name,
         storage=f"sqlite:///{STUDY_DB}",
         direction="maximize",
-        n_trials=N_TRIALS,
+        n_trials=n_trials,
         pruner="none",
-        resume=RESUME_STUDY,
+        resume=resume,
         tune_train_params=True,
         pretrain_cache_dir=str(PRETRAIN_CACHE),
         disable_pretrain_cache=False,
@@ -92,11 +91,11 @@ def build_args(src: int, trg: int) -> SimpleNamespace:
     )
 
 
-def run_pair(config: Dict[str, int]) -> None:
+def run_pair(config: Dict[str, int], *, n_trials: int, resume: bool) -> None:
     """Run Optuna for a single source/target domain pair."""
     src = int(config["src"])
     trg = int(config["trg"])
-    args = build_args(src, trg)
+    args = build_args(src, trg, n_trials=n_trials, resume=resume)
 
     print(f"\n[Optuna] {args.study_name}: {src} -> {trg}")
     original_parse_args = optuna_tuner.parse_args
@@ -107,11 +106,37 @@ def run_pair(config: Dict[str, int]) -> None:
         optuna_tuner.parse_args = original_parse_args
 
 
-def main(pairs: Iterable[Dict[str, int]]) -> None:
+def parse_cli_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Launch Optuna sweeps for specific HAR scenarios.")
+    parser.add_argument(
+        "--n-trials",
+        type=int,
+        default=DEFAULT_N_TRIALS,
+        help=f"Number of Optuna trials per scenario (default: {DEFAULT_N_TRIALS}).",
+    )
+    resume_group = parser.add_mutually_exclusive_group()
+    resume_group.add_argument(
+        "--resume",
+        dest="resume",
+        action="store_true",
+        help="Resume the existing Optuna study (default).",
+    )
+    resume_group.add_argument(
+        "--no-resume",
+        dest="resume",
+        action="store_false",
+        help="Start a fresh Optuna study, ignoring previous results.",
+    )
+    parser.set_defaults(resume=DEFAULT_RESUME)
+    return parser.parse_args()
+
+
+def main(pairs: Iterable[Dict[str, int]], *, n_trials: int, resume: bool) -> None:
     ensure_directories()
     for pair in pairs:
-        run_pair(pair)
+        run_pair(pair, n_trials=n_trials, resume=resume)
 
 
 if __name__ == "__main__":
-    main(PAIRS)
+    cli_args = parse_cli_args()
+    main(PAIRS, n_trials=cli_args.n_trials, resume=cli_args.resume)
