@@ -37,15 +37,15 @@ STUDY_DB = REPO_ROOT / "optuna.db"
 # ------------------------------------------------------------------------------
 # Search scenarios and shared options -----------------------------------------
 # ------------------------------------------------------------------------------
-PAIRS: List[Dict[str, int]] = [
-    {"src": 9, "trg": 18},
+SCENARIO_GROUPS: List[List[Dict[str, int]]] = [
+    [{"src": 9, "trg": 14}],
 ]
 
-DEFAULT_N_TRIALS = 80
+DEFAULT_N_TRIALS = 70
 DEFAULT_RESUME = True
 
 DA_METHOD = "ACCUP"
-DATASET = "HAR"
+DATASET = "EEG"
 BACKBONE = "CNN"
 NUM_RUNS = 3
 DEVICE = "cuda"
@@ -58,10 +58,11 @@ def ensure_directories() -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
-def build_args(src: int, trg: int, *, n_trials: int, resume: bool) -> SimpleNamespace:
+def build_args(group_id: int, scenarios: List[Dict[str, int]], *, n_trials: int, resume: bool) -> SimpleNamespace:
     """Construct the Namespace that optuna_tuner.main() expects."""
     tag = f"{DATASET.lower()}_{BACKBONE.lower()}"
-    study_name = f"{tag}_s{src}_t{trg}"
+    scenario_specs = [f"{cfg['src']}->{cfg['trg']}" for cfg in scenarios]
+    study_name = f"{tag}_group{group_id}"
     return SimpleNamespace(
         save_dir=str(SAVE_ROOT),
         exp_name=tag,
@@ -72,8 +73,9 @@ def build_args(src: int, trg: int, *, n_trials: int, resume: bool) -> SimpleName
         num_runs=NUM_RUNS,
         device=DEVICE,
         seed=SEED,
-        src_id=str(src),
-        trg_id=str(trg),
+        src_id=None,
+        trg_id=None,
+        scenarios=scenario_specs,
         study_name=study_name,
         storage=f"sqlite:///{STUDY_DB}",
         direction="maximize",
@@ -87,16 +89,17 @@ def build_args(src: int, trg: int, *, n_trials: int, resume: bool) -> SimpleName
         best_summary_path=None,
         write_overrides=True,
         overrides_config=str(REPO_ROOT / "configs" / "tta_hparams_new.py"),
+        search_span=0.3,
+        sensitive_span_scale=2.0,
     )
 
 
-def run_pair(config: Dict[str, int], *, n_trials: int, resume: bool) -> None:
-    """Run Optuna for a single source/target domain pair."""
-    src = int(config["src"])
-    trg = int(config["trg"])
-    args = build_args(src, trg, n_trials=n_trials, resume=resume)
+def run_group(group_id: int, configs: List[Dict[str, int]], *, n_trials: int, resume: bool) -> None:
+    """Run Optuna for a group of scenarios within a single study."""
+    args = build_args(group_id, configs, n_trials=n_trials, resume=resume)
+    scenario_desc = ", ".join(f"{cfg['src']}->{cfg['trg']}" for cfg in configs)
 
-    print(f"\n[Optuna] {args.study_name}: {src} -> {trg}")
+    print(f"\n[Optuna] {args.study_name}: scenarios [{scenario_desc}]")
     original_parse_args = optuna_tuner.parse_args
     try:
         optuna_tuner.parse_args = lambda: args  # type: ignore[assignment]
@@ -130,12 +133,12 @@ def parse_cli_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main(pairs: Iterable[Dict[str, int]], *, n_trials: int, resume: bool) -> None:
+def main(groups: Iterable[List[Dict[str, int]]], *, n_trials: int, resume: bool) -> None:
     ensure_directories()
-    for pair in pairs:
-        run_pair(pair, n_trials=n_trials, resume=resume)
+    for idx, group in enumerate(groups, start=1):
+        run_group(idx, group, n_trials=n_trials, resume=resume)
 
 
 if __name__ == "__main__":
     cli_args = parse_cli_args()
-    main(PAIRS, n_trials=cli_args.n_trials, resume=cli_args.resume)
+    main(SCENARIO_GROUPS, n_trials=cli_args.n_trials, resume=cli_args.resume)

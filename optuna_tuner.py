@@ -5,13 +5,16 @@ import math
 import uuid
 from argparse import Namespace
 from pathlib import Path
-from typing import Any, Dict, Tuple, Optional
+from typing import Any, Dict, Tuple, Optional, List
 
 import optuna
 import torch
 
 from trainers.tta_trainer import TTATrainer
 from configs.data_model_configs import get_dataset_class
+
+SEARCH_SPAN = 0.3
+SENSITIVE_SPAN_SCALE = 2.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -21,10 +24,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--save-dir', default='results/tta_experiments_logs', type=str)
     parser.add_argument('--exp-name', default='optuna', type=str)
     parser.add_argument('--da-method', default='ACCUP', type=str)
-    parser.add_argument('--data-path', default=r'E:\Dataset', type=str)
+    parser.add_argument('--data-path', default=r'D:\PyCharm Project\ACCUP + EATA\data\Dataset', type=str)
     parser.add_argument('--dataset', default='EEG', type=str)
     parser.add_argument('--backbone', default='TimesNet', type=str)
-    parser.add_argument('--num-runs', default=1, type=int)
+    parser.add_argument('--num-runs', default=3, type=int)
     parser.add_argument('--device', default='cuda', type=str)
     parser.add_argument('--seed', default=42, type=int)
     parser.add_argument(
@@ -37,6 +40,13 @@ def parse_args() -> argparse.Namespace:
     # Scenario selection
     parser.add_argument('--src-id', type=str, default=None, help="Source domain ID to adapt from.")
     parser.add_argument('--trg-id', type=str, default=None, help="Target domain ID to adapt to.")
+    parser.add_argument(
+        '--scenario',
+        dest='scenarios',
+        action='append',
+        default=None,
+        help="Specify src->trg pair. Repeat to evaluate multiple scenarios per trial.",
+    )
 
     # Optuna configuration
     parser.add_argument('--study-name', default='tta_optuna', type=str)
@@ -84,22 +94,58 @@ def parse_args() -> argparse.Namespace:
         default='configs/tta_hparams_new.py',
         help="Path to the hyperparameter config containing SCENARIO_OVERRIDES dictionaries.",
     )
+    parser.add_argument(
+        '--search-span',
+        type=float,
+        default=0.3,
+        help="Base relative span (e.g., 0.3 for ±30%) around scenario defaults when sampling hyperparameters.",
+    )
+    parser.add_argument(
+        '--sensitive-span-scale',
+        type=float,
+        default=2.0,
+        help="Multiplier applied to key ACCUP hyperparameters (LR, quantile, safety_keep_frac, etc.).",
+    )
 
     return parser.parse_args()
 
 
-def resolve_scenario(dataset: str, src_id: Optional[str], trg_id: Optional[str]) -> Tuple[str, str]:
-    """Fall back to the first configured scenario if user does not specify one."""
+def _parse_scenario_spec(spec: str) -> Tuple[str, str]:
+    if "->" in spec:
+        src, trg = spec.split("->", 1)
+    elif "," in spec:
+        src, trg = spec.split(",", 1)
+    else:
+        raise ValueError(f"Invalid scenario spec '{spec}'. Expected format src->trg.")
+    return src.strip(), trg.strip()
+
+
+def resolve_scenarios(
+    dataset: str,
+    src_id: Optional[str],
+    trg_id: Optional[str],
+    scenario_specs: Optional[List[Any]] = None,
+) -> List[Tuple[str, str]]:
+    """Return the list of scenarios to evaluate per trial."""
+    pairs: List[Tuple[str, str]] = []
+
+    if scenario_specs:
+        for spec in scenario_specs:
+            if isinstance(spec, (tuple, list)) and len(spec) == 2:
+                src, trg = spec
+            else:
+                src, trg = _parse_scenario_spec(str(spec))
+            pairs.append((str(src), str(trg)))
+        return pairs
+
     if src_id is not None and trg_id is not None:
-        return str(src_id), str(trg_id)
+        return [(str(src_id), str(trg_id))]
 
     dataset_cfg = get_dataset_class(dataset)()
     if not getattr(dataset_cfg, "scenarios", None):
         raise ValueError(f"Dataset {dataset} does not define any scenarios.")
     default_src, default_trg = dataset_cfg.scenarios[0]
-    resolved_src = str(src_id) if src_id is not None else str(default_src)
-    resolved_trg = str(trg_id) if trg_id is not None else str(default_trg)
-    return resolved_src, resolved_trg
+    return [(str(default_src), str(default_trg))]
 
 
 def format_scenario_key(src_id: str, trg_id: str) -> str:
@@ -227,58 +273,10 @@ def suggest_train_params(trial: optuna.Trial, train_params: Optional[Dict[str, A
 
 def _suggest_training_scope(trial: optuna.Trial) -> Dict[str, Any]:
     """
-    Sample a coherent training scope configuration so Optuna does not
-    explore self-contradictory combinations (e.g., full backbone + frozen BN).
+    Constrain Optuna to always adapt the full backbone + classifier.
+    This keeps the search space aligned with the desired “常开”训练范围。
     """
-    scope = trial.suggest_categorical("train_scope", ["bn_only", "partial", "full"])
     scope_params: Dict[str, Any] = {}
-
-    if scope == "bn_only":
-        scope_params["train_full_backbone"] = False
-        scope_params["train_classifier"] = False
-        scope_params["train_backbone_modules"] = None
-        scope_params["freeze_bn_stats"] = trial.suggest_categorical(
-            "freeze_bn_stats_bn_only", [True, False]
-        )
-        scope_params["filter_K"] = trial.suggest_int("filter_K_bn_only", 5, 17, step=2)
-        scope_params["safety_keep_frac"] = trial.suggest_float(
-            "safety_keep_frac_bn_only", 0.05, 0.4
-        )
-        scope_params["grad_clip"] = trial.suggest_float("grad_clip_bn_only", 0.1, 0.7)
-        scope_params["grad_clip_value"] = trial.suggest_categorical(
-            "grad_clip_value_bn_only", [None, 0.05, 0.1]
-        )
-        return scope_params
-
-    if scope == "partial":
-        scope_params["train_full_backbone"] = False
-        scope_params["train_classifier"] = trial.suggest_categorical(
-            "train_classifier_partial", [False, True]
-        )
-        module_choice = trial.suggest_categorical(
-            "partial_module_bundle",
-            ["conv1", "conv12", "conv123"],
-        )
-        partial_map = {
-            "conv1": ["conv_block1"],
-            "conv12": ["conv_block1", "conv_block2"],
-            "conv123": ["conv_block1", "conv_block2", "conv_block3"],
-        }
-        scope_params["train_backbone_modules"] = partial_map[module_choice]
-        scope_params["freeze_bn_stats"] = trial.suggest_categorical(
-            "freeze_bn_stats_partial", [True, False]
-        )
-        scope_params["filter_K"] = trial.suggest_int("filter_K_partial", 7, 25, step=2)
-        scope_params["safety_keep_frac"] = trial.suggest_float(
-            "safety_keep_frac_partial", 0.15, 0.65
-        )
-        scope_params["grad_clip"] = trial.suggest_float("grad_clip_partial", 0.2, 1.0)
-        scope_params["grad_clip_value"] = trial.suggest_categorical(
-            "grad_clip_value_partial", [None, 0.05, 0.1, 0.25]
-        )
-        return scope_params
-
-    # full scope
     scope_params["train_full_backbone"] = True
     scope_params["train_classifier"] = True
     scope_params["train_backbone_modules"] = None
@@ -301,36 +299,84 @@ def suggest_accup_params(
     train_params: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, float]:
     """Define search space for ACCUP + EATA."""
+    base_ratio = max(0.05, float(SEARCH_SPAN))  # default relative span
+    sensitive_scale = max(1.0, float(SENSITIVE_SPAN_SCALE))
+
+    def narrow_float(name, default_low, default_high, *, log=False, min_clip=None, max_clip=None, ratio_scale=1.0):
+        base = base_hparams.get(name, None)
+        if base is None:
+            return trial.suggest_float(name, default_low, default_high, log=log)
+        base = float(base)
+        span_ratio = base_ratio * ratio_scale
+        if log:
+            low = base * (1 - span_ratio)
+            high = base * (1 + span_ratio)
+        else:
+            span = max(1e-9, abs(base) * span_ratio)
+            low = base - span
+            high = base + span
+        if min_clip is not None:
+            low = max(min_clip, low)
+        if max_clip is not None:
+            high = min(max_clip, high)
+        if low >= high:
+            high = low + (1e-6 if log else 1e-3)
+        return trial.suggest_float(name, low, high, log=log)
+
+    def narrow_int(name, default_low, default_high, *, step=1, min_clip=None, max_clip=None, ratio_scale=1.0):
+        base = base_hparams.get(name, None)
+        if base is None:
+            return trial.suggest_int(name, default_low, default_high, step=step)
+        base = int(round(base))
+        span_ratio = base_ratio * ratio_scale
+        delta = max(step, int(round(max(1, base) * span_ratio)))
+        low = base - delta
+        high = base + delta
+        if min_clip is not None:
+            low = max(min_clip, low)
+        if max_clip is not None:
+            high = min(max_clip, high)
+        if low > high:
+            low = high = base
+        return trial.suggest_int(name, low, high, step=step)
+
+    frozen_scope_keys = (
+        "train_full_backbone",
+        "train_backbone_modules",
+        "train_classifier",
+        "freeze_bn_stats",
+    )
+    frozen_scope = {k: base_hparams.get(k) for k in frozen_scope_keys}
+
     suggestions = {
-        "learning_rate": trial.suggest_float("learning_rate", 1e-5, 5e-4, log=True),
-        "pre_learning_rate": trial.suggest_float("pre_learning_rate", 1e-5, 5e-4, log=True),
-        "tau": trial.suggest_int("tau", 5, 30),
-        "temperature": trial.suggest_float("temperature", 0.3, 3.0),
-        "warmup_min": trial.suggest_int("warmup_min", 8, 320),
-        "quantile": trial.suggest_float("quantile", 0.1, 0.9),
-        "use_quantile": trial.suggest_categorical("use_quantile", [True, False]),
-        "lambda_eata": trial.suggest_float("lambda_eata", 0.5, 2.5),
-        "e_margin_scale": trial.suggest_float("e_margin_scale", 0.2, 0.9),
-        "d_margin": trial.suggest_float("d_margin", 0.0, 0.15),
-        "memory_size": trial.suggest_int("memory_size", 512, 4096, step=256),
-        "fisher_alpha": trial.suggest_float("fisher_alpha", 500.0, 9000.0),
-        "use_eata_select": trial.suggest_categorical("use_eata_select", [True, False]),
-        "use_eata_reg": trial.suggest_categorical("use_eata_reg", [True, False]),
-        "online_fisher": trial.suggest_categorical("online_fisher", [True, False]),
-        "include_warmup_support": trial.suggest_categorical("include_warmup_support", [True, False]),
-        "max_fisher_updates": trial.suggest_categorical(
-            "max_fisher_updates", [-1, 32, 64, 128, 256, 512, 1024]
-        ),
+        "learning_rate": narrow_float("learning_rate", 1e-5, 5e-4, log=True, min_clip=1e-6, max_clip=1e-3, ratio_scale=sensitive_scale),
+        "pre_learning_rate": narrow_float("pre_learning_rate", 1e-5, 5e-4, log=True, min_clip=1e-6, max_clip=1e-3, ratio_scale=sensitive_scale),
+        "tau": narrow_int("tau", 5, 30, min_clip=3, max_clip=60),
+        "temperature": narrow_float("temperature", 0.3, 3.0, min_clip=0.1, max_clip=5.0, ratio_scale=1.5),
+        "quantile": narrow_float("quantile", 0.1, 0.9, min_clip=0.05, max_clip=0.95, ratio_scale=sensitive_scale),
+        "lambda_eata": narrow_float("lambda_eata", 0.5, 2.5, min_clip=0.1, max_clip=4.0, ratio_scale=sensitive_scale),
+        "e_margin_scale": narrow_float("e_margin_scale", 0.2, 0.9, min_clip=0.05, max_clip=1.5),
+        "d_margin": narrow_float("d_margin", 0.0, 0.15, min_clip=0.0, max_clip=0.3),
+        "fisher_alpha": narrow_float("fisher_alpha", 500.0, 9000.0, min_clip=10.0, max_clip=20000.0),
+        "filter_K": narrow_int("filter_K", 5, 33, step=2, min_clip=3, max_clip=63, ratio_scale=sensitive_scale),
+        "safety_keep_frac": narrow_float("safety_keep_frac", 0.1, 0.9, min_clip=0.05, max_clip=0.95, ratio_scale=sensitive_scale),
+        "use_quantile": bool(base_hparams.get("use_quantile", True)),
+        "use_eata_select": True,
+        "use_eata_reg": True,
+        "online_fisher": True,
+        "include_warmup_support": True,
     }
 
-    # Keep values within sensible bounds around the defaults if available.
-    if "temperature" in base_hparams:
-        default_temp = float(base_hparams["temperature"])
-        lo = max(0.1, default_temp * 0.5)
-        hi = default_temp * 2.5
-        suggestions["temperature"] = trial.suggest_float("temperature", lo, hi)
+    # Parameters we keep fixed to the anchor values to stabilize search.
+    suggestions["memory_size"] = int(base_hparams.get("memory_size", 2048))
+    suggestions["warmup_min"] = int(base_hparams.get("warmup_min", 64))
+    suggestions["max_fisher_updates"] = int(base_hparams.get("max_fisher_updates", -1))
 
     suggestions.update(_suggest_training_scope(trial))
+
+    for key, value in frozen_scope.items():
+        if value is not None:
+            suggestions[key] = value
 
     if train_params:
         suggestions.update(suggest_train_params(trial, train_params))
@@ -558,7 +604,11 @@ def make_trainer_args(args: argparse.Namespace, trial_number: int) -> Namespace:
     )
 
 
-def objective(trial: optuna.Trial, args: argparse.Namespace, scenario: Tuple[str, str]) -> float:
+def objective(
+    trial: optuna.Trial,
+    args: argparse.Namespace,
+    scenarios: List[Tuple[str, str]],
+) -> float:
     trainer_args = make_trainer_args(args, trial.number)
     trainer = TTATrainer(trainer_args)
     batch_size_override = getattr(args, "batch_size", None)
@@ -567,27 +617,29 @@ def objective(trial: optuna.Trial, args: argparse.Namespace, scenario: Tuple[str
         trainer._train_params['batch_size'] = batch_size_override
         trainer.hparams['batch_size'] = batch_size_override
 
-    # Limit to the requested scenario
-    src_id, trg_id = scenario
-    trainer.dataset_configs.scenarios = [(str(src_id), str(trg_id))]
+    # Limit to the requested scenarios for this trial
+    scenario_pairs = [(str(src), str(trg)) for src, trg in scenarios]
+    trainer.dataset_configs.scenarios = scenario_pairs
 
     # Sample new hyperparameters and apply before adaptation
-    base_hparams = dict(trainer._base_alg_hparams)
+    reference_hparams = dict(trainer._base_alg_hparams)
+    anchor_override = trainer.get_scenario_override(*scenario_pairs[0])
+    reference_hparams.update(anchor_override)
     trial_hparams = build_search_space(
         trial,
         args.da_method,
-        base_hparams,
+        reference_hparams,
         dict(trainer._train_params) if args.tune_train_params else None,
     )
     if args.backbone.lower() == "timesnet":
         trial_hparams.update(suggest_timesnet_params(trial, trainer.dataset_configs))
 
-    scenario_key = (str(src_id), str(trg_id))
-    existing_override = trainer.get_scenario_override(src_id, trg_id)
-    combined_override = dict(existing_override)
-    combined_override.update(trial_hparams)
-    trainer.store_scenario_override(src_id, trg_id, combined_override)
-    trainer.hparams.update(combined_override)
+    for src_id, trg_id in scenario_pairs:
+        existing_override = trainer.get_scenario_override(src_id, trg_id)
+        combined_override = dict(existing_override)
+        combined_override.update(trial_hparams)
+        trainer.store_scenario_override(src_id, trg_id, combined_override)
+    trainer.hparams.update(trial_hparams)
 
     try:
         trainer.test_time_adaptation()
@@ -602,24 +654,51 @@ def objective(trial: optuna.Trial, args: argparse.Namespace, scenario: Tuple[str
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    metrics = trainer.scenario_metrics.get(scenario_key)
-    if metrics is None:
-        raise RuntimeError(f"No metrics recorded for scenario {scenario_key}.")
+    trial_metrics: Dict[str, Dict[str, float]] = {}
+    aggregated_f1: List[float] = []
 
-    trial.set_user_attr("metrics", metrics)
+    for src_id, trg_id in scenario_pairs:
+        key = (str(src_id), str(trg_id))
+        metrics = trainer.scenario_metrics.get(key)
+        if metrics is None:
+            raise RuntimeError(f"No metrics recorded for scenario {format_scenario_key(*key)}.")
+        scenario_key = format_scenario_key(*key)
+        trial_metrics[scenario_key] = metrics
+        aggregated_f1.append(float(metrics["f1_mean"]))
+        for stat_key, stat_value in metrics.items():
+            attr_name = f"{scenario_key}.{stat_key}"
+            trial.set_user_attr(attr_name, stat_value)
+
+    if not trial_metrics:
+        raise RuntimeError("Trainer did not record any scenario metrics.")
+
+    objective_value = float(sum(aggregated_f1) / len(aggregated_f1))
+    trial.set_user_attr("metrics", trial_metrics)
+    trial.set_user_attr("scenario_keys", list(trial_metrics.keys()))
+
     for key, value in trial_hparams.items():
         trial.set_user_attr(f"hparam_{key}", value)
-    trial.set_user_attr("scenario_key", format_scenario_key(*scenario_key))
+    trial.set_user_attr("objective_avg_f1", objective_value)
 
     # Maximize macro F1 score by default
-    return float(metrics["f1_mean"])
+    return objective_value
 
 
 def main():
     args = parse_args()
+    global SEARCH_SPAN, SENSITIVE_SPAN_SCALE
+    SEARCH_SPAN = max(0.05, float(args.search_span))
+    SENSITIVE_SPAN_SCALE = max(1.0, float(args.sensitive_span_scale))
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-    scenario = resolve_scenario(args.dataset, args.src_id, args.trg_id)
+    scenarios = resolve_scenarios(
+        args.dataset,
+        args.src_id,
+        args.trg_id,
+        getattr(args, "scenarios", None),
+    )
+    scenario_labels = [format_scenario_key(*pair) for pair in scenarios]
+    scenario_summary = ", ".join(scenario_labels)
 
     pruner = build_pruner(args.pruner)
     study = optuna.create_study(
@@ -631,7 +710,7 @@ def main():
     )
 
     try:
-        study.optimize(lambda trial: objective(trial, args, scenario), n_trials=args.n_trials)
+        study.optimize(lambda trial: objective(trial, args, scenarios), n_trials=args.n_trials)
     except KeyboardInterrupt:
         print("Optuna search interrupted by user.")
 
@@ -639,20 +718,16 @@ def main():
         print("No trials were completed.")
         return
 
-    scenario_key = format_scenario_key(*scenario)
-    completed_trials = [
-        t for t in study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
-        if t.user_attrs.get("scenario_key") == scenario_key
-    ]
+    completed_trials = study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
 
     if not completed_trials:
-        print(f"No completed trials found for scenario {scenario_key}.")
+        print(f"No completed trials found for scenarios: {scenario_summary}.")
     else:
         best = max(
             completed_trials,
             key=lambda t: t.value if t.value is not None else float("-inf"),
         )
-        print(f"Best F1 for scenario {scenario_key}: {best.value:.4f}")
+        print(f"Best average F1 across [{scenario_summary}]: {best.value:.4f}")
         sanitized_params = {
             k[len("hparam_"):]: v
             for k, v in (best.user_attrs or {}).items()
@@ -664,9 +739,17 @@ def main():
         print("Best params (applied to trainer):")
         for k, v in sanitized_params.items():
             print(f"  {k}: {v}")
-        print("Recorded metrics:")
-        for k, v in (best.user_attrs.get("metrics") or {}).items():
-            print(f"  {k}: {v}")
+        metrics_blob = best.user_attrs.get("metrics") or {}
+        if metrics_blob:
+            print("Recorded metrics per scenario:")
+            for scenario_name in sorted(metrics_blob.keys()):
+                print(f"  [{scenario_name}]")
+                for metric_key in sorted(metrics_blob[scenario_name].keys()):
+                    label = "Std" if metric_key.endswith("_std") else "Mean"
+                    value = metrics_blob[scenario_name][metric_key]
+                    print(f"    {metric_key} ({label}): {value}")
+        else:
+            print("Recorded metrics: <none>")
 
         if args.best_summary_path:
             summary_path = Path(args.best_summary_path)
@@ -683,7 +766,8 @@ def main():
                 print(f"Warning: Failed to decode {summary_path} ({exc}). Overwriting.")
                 existing = {}
 
-            existing[scenario_key] = {
+            summary_key = " | ".join(scenario_labels)
+            existing[summary_key] = {
                 "study_name": study.study_name,
                 "trial_number": best.number,
                 "objective_value": float(best.value) if best.value is not None else None,
@@ -692,22 +776,23 @@ def main():
             }
 
             summary_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"Updated best hyperparameters at {summary_path} for scenario {scenario_key}.")
+            print(f"Updated best hyperparameters at {summary_path} for scenarios [{scenario_summary}].")
 
         if args.write_overrides:
             overrides_path = Path(args.overrides_config)
-            update_scenario_overrides(
-                overrides_path,
-                args.dataset,
-                args.da_method,
-                scenario,
-                sanitized_params,
-                backbone=args.backbone,
-            )
+            for src_id, trg_id in scenarios:
+                update_scenario_overrides(
+                    overrides_path,
+                    args.dataset,
+                    args.da_method,
+                    (str(src_id), str(trg_id)),
+                    sanitized_params,
+                    backbone=args.backbone,
+                )
             print(
                 "Updated "
                 f"{args.dataset.upper()}_{args.da_method.upper()}_SCENARIO_OVERRIDES "
-                f"in {overrides_path} for scenario {scenario_key}."
+                f"in {overrides_path} for scenarios [{scenario_summary}]."
             )
 
     if args.viz_dir:

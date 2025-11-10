@@ -78,6 +78,10 @@ class TTATrainer(TTAAbstractTrainer):
         for src_id, trg_id in self.dataset_configs.scenarios:
             self.set_scenario_hparams(src_id, trg_id)
             self._current_scenario = (str(src_id), str(trg_id))
+            if hasattr(self.dataset_configs, "_active_scenario"):
+                self.dataset_configs._active_scenario = self._current_scenario
+            else:
+                setattr(self.dataset_configs, "_active_scenario", self._current_scenario)
             scenario = f"{src_id}_to_{trg_id}"
             cur_scenario_f1_ret = []
             cur_scenario_metrics = []
@@ -99,7 +103,7 @@ class TTATrainer(TTAAbstractTrainer):
                 if self.da_method == "NoAdap":
                     self.load_data(src_id, trg_id)
                 else:
-                    self.load_data_demo(src_id, trg_id, run_id)
+                    self.load_data_demo(src_id, trg_id, self.seed)
 
                 print('Total test datasize:', len(self.trg_whole_dl.dataset))
                 all_labels = torch.zeros(self.dataset_configs.num_classes)
@@ -245,7 +249,7 @@ if __name__ == "__main__":
     # ========= Select the DA methods ============
     parser.add_argument('--da_method', default='ACCUP', type=str, help='ACCUP, NoAdap')
     # ========= Select the DATASET ==============
-    parser.add_argument('--data_path', default=r'E:\Dataset', type=str, help='Path containing dataset')
+    parser.add_argument('--data-path', default=r'D:\PyCharm Project\ACCUP + EATA\data\Dataset', type=str)
     parser.add_argument('--dataset', default='EEG', type=str, help='Dataset of choice: (WISDM - EEG - HAR - HHAR_SA)')
     # ========= Select the BACKBONE ==============
     parser.add_argument('--backbone', default='CNN', type=str, help='Backbone of choice: (CNN - RESNET18 - TCN)')

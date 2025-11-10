@@ -32,8 +32,19 @@ class ACCUP(BaseTestTimeAlgorithm):
 
         self.hparams = hparams  # 保存一下，后面用
 
+        # These knobs are now always-on; keep the dict in sync so downstream code sees True.
+        for always_on in (
+            "train_full_backbone",
+            "train_classifier",
+            "online_fisher",
+            "include_warmup_support",
+            "use_eata_select",
+            "use_eata_reg",
+        ):
+            self.hparams[always_on] = True
+
         required = [
-            'memory_size', 'use_eata_select', 'use_eata_reg',
+            'memory_size',
             'filter_K', 'tau', 'temperature',
             'e_margin_scale', 'd_margin',
             'warmup_min', 'quantile', 'safety_keep_frac',
@@ -46,10 +57,10 @@ class ACCUP(BaseTestTimeAlgorithm):
         self.memory = EATAMemory(maxlen=int(hparams['memory_size']),
                                  device=hparams.get('device', 'cpu'))
 
-        self.use_eata_select = bool(hparams.get("use_eata_select", True))  # 是否启用“低熵+去冗余”筛样本
-        self.use_eata_reg    = bool(hparams.get("use_eata_reg", True))     # 是否启用 Fisher/L2-SP 正则
-        self.online_fisher   = bool(hparams.get('online_fisher', True))    # enable Fisher regularization online during TTA
-        self.include_warmup_support = bool(hparams.get('include_warmup_support', True))
+        self.use_eata_select = True  # keep “低熵+去冗余”样本筛选常开
+        self.use_eata_reg    = True  # always enable Fisher/L2-SP regularization
+        self.online_fisher   = True    # keep Fisher regularization active during TTA
+        self.include_warmup_support = True  # retain warmup supports in the prototype bank
         self.max_fisher_updates = int(hparams.get('max_fisher_updates', -1))  # <0 means unlimited
 
         # ---- 原 ACCUP 成员 ----
@@ -276,9 +287,12 @@ class ACCUP(BaseTestTimeAlgorithm):
 
         Defaults mimic the original ACCUP behaviour (BN affine + early Conv1d blocks),
         but the scope can be expanded through hyperparameters:
-          - train_full_backbone: unfreeze the entire feature_extractor (e.g. TimesNet)
+          - train_full_backbone: unfreeze the entire feature_extractor (e.g. TimesNet). This
+            flag is now forced to True so the whole backbone always adapts.
           - train_backbone_modules: iterable of module names inside feature_extractor to unfreeze
-          - train_classifier: allow the classifier head to adapt alongside the backbone
+            (ignored once train_full_backbone is enforced).
+          - train_classifier: allow the classifier head to adapt alongside the backbone. Also
+            forced to True so the classifier is always trainable.
           - freeze_bn_stats: keep running stats frozen (legacy default) or let them update
           - train_bn_affine: toggle whether BN affine parameters remain trainable
         """
@@ -287,9 +301,9 @@ class ACCUP(BaseTestTimeAlgorithm):
 
         freeze_bn_stats = bool(self.hparams.get("freeze_bn_stats", True))
         train_bn_affine = bool(self.hparams.get("train_bn_affine", True))
-        train_full_backbone = bool(self.hparams.get("train_full_backbone", False))
+        train_full_backbone = True  # always adapt the entire feature extractor
         train_backbone_modules = self.hparams.get("train_backbone_modules", None)
-        train_classifier = bool(self.hparams.get("train_classifier", train_full_backbone))
+        train_classifier = True  # classifier head stays trainable as well
 
         for module in model.modules():
             if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
