@@ -145,7 +145,7 @@ def data_generator_demo(data_path, domain_id, dataset_configs, hparams, dtype):
     dataset = Load_Dataset(dataset_file, dataset_configs)
     if dtype == "test":
         shuffle = False
-        drop_last = True
+        drop_last = hparams.get("drop_last_test", True)
     else:
         shuffle = dataset_configs.shuffle
         drop_last = dataset_configs.drop_last
@@ -213,7 +213,8 @@ def whole_targe_data_generator_demo(data_path, domain_id, dataset_configs, hpara
         dataset=whole_dataset,
         batch_size=hparams["batch_size"],
         shuffle=False,     # 评测不打乱
-        drop_last=True,   # 不丢最后一批
+        drop_last=hparams.get("drop_last_eval",
+                              hparams.get("drop_last_test", True)),   # 不丢最后一批
         num_workers=0
     )
     print(f"[DEBUG] eval only test_{domain_id}.pt  | size={len(whole_dataset)}")  # 可留作确认

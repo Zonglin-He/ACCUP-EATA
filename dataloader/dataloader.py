@@ -107,9 +107,9 @@ def data_generator(data_path, domain_id, dataset_configs, hparams, dtype):
 
     dataset = Load_Dataset(dataset_file, dataset_configs)  # 使用 Load_Dataset 类加载数据集
 
-    if dtype == "test":  # 测试集不打乱且不丢弃最后一个不满批次
+    if dtype == "test":  # 测试集不打乱，是否丢弃末批由超参控制
         shuffle = False
-        drop_last = True
+        drop_last = hparams.get("drop_last_test", True)
     else:  # 训练/验证集根据配置决定是否打乱和丢弃最后一个不满批次
         shuffle = dataset_configs.shuffle
         drop_last = dataset_configs.drop_last
@@ -133,7 +133,8 @@ def whole_targe_data_generator(data_path, domain_id, dataset_configs, hparams):
     whole_dataset = Load_ALL_Dataset(train_dataset_file, test_dataset_file, dataset_configs)  # 整合数据集
 
     shuffle = False  # 整体数据不打乱且不丢弃最后一个不满批次
-    drop_last = True
+    drop_last = hparams.get("drop_last_eval",
+                            hparams.get("drop_last_test", True))
 
     # Dataloaders
     data_loader = torch.utils.data.DataLoader(dataset=whole_dataset,
