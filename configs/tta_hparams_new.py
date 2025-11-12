@@ -477,73 +477,68 @@ FD_ACCUP_SCENARIO_OVERRIDES = {
 
 EEG_ACCUP_SCENARIO_OVERRIDES = {
     backbone_scenario('CNN', 0, 11): {
-        'num_epochs': 30,
-        'batch_size': 128,        # ↑ 从 64 提到 96：更稳定的 BN/统计，CPU 也扛得住
-        'weight_decay': 5e-5,
-        'step_size': 10,         # ↓ 让预训练在第20轮衰减一次学习率
+        'batch_size': 128,
+        'e_margin_scale': 0.3,
+        'filter_K': 18,
+        'fisher_alpha': 1000,
+        'freeze_bn_stats': True,
+        'grad_clip': 0.8,
+        'grad_clip_value': None,
+        'include_warmup_support': True,
+        'learning_rate': 3e-05,
         'lr_decay': 0.5,
-        'steps': 1,
+        'max_fisher_updates': 256,
         'momentum': 0.6,
-
-        # ——选样/温度：先收紧——
+        'num_epochs': 30,
+        'online_fisher': True,
+        'quantile': 0.1,
+        'safety_keep_frac': 0.3,
+        'step_size': 10,
+        'steps': 1,
+        'tau': 8,
+        'temperature': 0.9,
+        'train_backbone_modules': ['conv_block1', 'conv_block2'],
+        'train_classifier': True,
+        'train_full_backbone': False,
         'use_eata_select': True,
         'use_quantile': True,
-        'quantile': 0.10,  # 保持，但让它“真的生效”
-        'temperature': 0.9,  # 2.699 -> 1.0，整体降熵
-        'e_margin_scale': 0.30,  # 0.5108 -> 0.40，使 base≈ln(5)*0.40≈0.64
-        'tau': 8,  # 26 -> 8，增强对比梯度
-
-        # ——训练范围：只动少量层——
-        'train_full_backbone': False,
-        'train_backbone_modules': ['conv_block1', 'conv_block2'],  # 只调 BN 仿射
-        'train_classifier': True,
-        'freeze_bn_stats': True,  # EEG 上先稳住统计量
-
-        # ——Fisher：软一些——
-        'online_fisher': True,
-        'fisher_alpha': 1000,  # 7895 -> 1500
-        'max_fisher_updates': 256,  # 1024 -> 256
-
-        # ——原型/支持集：更积极刷新——
-        'include_warmup_support': True,
-        'warmup_min': 64,  # 保持大致两批后开始
-        'filter_K': 18,  # 7 -> 15（按类配额）
-        'safety_keep_frac': 0.30,  # 0.628 -> 0.35
-
-        # ——优化/裁剪（TTA 用）——
-        'learning_rate': 3e-5,  # 9.0e-5 -> 3e-5（可训练层少，LR 也要降）
-        'grad_clip': 0.8,  # 0.566 -> 0.8
-        'grad_clip_value': None,  # 取消元素级裁剪（容易把梯度“拍扁”）
+        'warmup_min': 64,
+        'weight_decay': 5e-05,
     },
 
-
     backbone_scenario('CNN', 7, 18): {
-        'batch_size': 128,
-        'd_margin': 0.07034442316377004,
-        'e_margin_scale': 0.5489757739417829,
-        'filter_K': 21,
-        'fisher_alpha': 1500,
+        'batch_size': 72,
+        'd_margin': 0.08691989070402874,
+        'e_margin_scale': 0.44389673264463775,
+        'filter_K': 11,
+        'fisher_alpha': 1885.9394440337037,
         'freeze_bn_stats': True,
-        'grad_clip': 0.6,
-        'grad_clip_value': None,
-        'lambda_eata': 1.560838942707314,
-        'learning_rate': 7.921067220074702e-05,
-        'lr_decay': 0.67224375631797,
+        'grad_clip': 0.3973934449250573,
+        'grad_clip_value': 0.5,
+        'include_warmup_support': True,
+        'lambda_eata': 2.3518480455476194,
+        'learning_rate': 0.0001060326335977845,
+        'lr_decay': 0.5798775937654851,
         'max_fisher_updates': 512,
         'memory_size': 3328,
-        'momentum': 0.7967429567554412,
-        'num_epochs': 30,
-        'pre_learning_rate': 0.00025294216070997867,
-        'quantile': 0.25,
-        'safety_keep_frac': 0.30,
-        'step_size': 22,
-        'steps': 5,
-        'tau': 24,
-        'temperature': 1.0,
+        'momentum': 0.749017639786859,
+        'num_epochs': 58,
+        'online_fisher': True,
+        'pre_learning_rate': 0.000371740330832724,
+        'quantile': 0.35280854004835005,
+        'safety_keep_frac': 0.3948547269219331,
+        'step_size': 25,
+        'steps': 2,
+        'tau': 28,
+        'temperature': 0.7795403971191518,
         'train_backbone_modules': None,
+        'train_classifier': True,
+        'train_full_backbone': True,
+        'use_eata_reg': True,
+        'use_eata_select': True,
         'use_quantile': True,
         'warmup_min': 70,
-        'weight_decay': 1.384398473343541e-05,
+        'weight_decay': 4.157333141396952e-05,
     },
 
     backbone_scenario('CNN', 9, 14): {
@@ -555,6 +550,7 @@ EEG_ACCUP_SCENARIO_OVERRIDES = {
         'freeze_bn_stats': True,
         'grad_clip': 0.8,
         'grad_clip_value': None,
+        'include_warmup_support': True,
         'lambda_eata': 1.732693370751086,
         'learning_rate': 6.64567486281664e-05,
         'lr_decay': 0.5338753097097609,
@@ -563,30 +559,30 @@ EEG_ACCUP_SCENARIO_OVERRIDES = {
         'momentum': 0.9794323471899682,
         'num_epochs': 25,
         'pre_learning_rate': 0.0004995175766702046,
-        'quantile': 0.30,
+        'quantile': 0.3,
         'safety_keep_frac': 0.5250050659384953,
         'step_size': 30,
         'steps': 2,
         'tau': 13,
         'temperature': 1.0,
-        'train_full_backbone': False,
-        'train_backbone_modules': ['conv_block1', 'conv_block2'],  # 只调 BN 仿射
+        'train_backbone_modules': ['conv_block1', 'conv_block2'],
         'train_classifier': True,
+        'train_full_backbone': False,
         'use_quantile': True,
         'warmup_min': 170,
         'weight_decay': 4.395625457432446e-05,
-        'include_warmup_support': True,
     },
 
     backbone_scenario('CNN', 12, 5): {
         'batch_size': 90,
         'd_margin': 0.06327217957578415,
-        'e_margin_scale': 0.40,
+        'e_margin_scale': 0.4,
         'filter_K': 21,
         'fisher_alpha': 1200,
         'freeze_bn_stats': True,
         'grad_clip': 0.6367227475236301,
         'grad_clip_value': 0.1,
+        'include_warmup_support': True,
         'lambda_eata': 1.7877750308800844,
         'learning_rate': 0.00013489103307438513,
         'lr_decay': 0.4900773686888742,
@@ -595,19 +591,18 @@ EEG_ACCUP_SCENARIO_OVERRIDES = {
         'momentum': 0.8910421866333144,
         'num_epochs': 34,
         'pre_learning_rate': 0.0003576952899015023,
-        'quantile': 0.30,
+        'quantile': 0.3,
         'safety_keep_frac': 0.08412994435207588,
         'step_size': 25,
         'steps': 1,
         'tau': 18,
         'temperature': 2.0,
-        'train_full_backbone': False,
-        'train_backbone_modules': ['conv_block1', 'conv_block2'],  # 只调 BN 仿射
+        'train_backbone_modules': ['conv_block1', 'conv_block2'],
         'train_classifier': True,
+        'train_full_backbone': False,
         'use_quantile': True,
         'warmup_min': 96,
         'weight_decay': 6.192854881429892e-05,
-        'include_warmup_support': True,
     },
 
     backbone_scenario('CNN', 16, 1): {
@@ -619,6 +614,7 @@ EEG_ACCUP_SCENARIO_OVERRIDES = {
         'freeze_bn_stats': True,
         'grad_clip': 0.5829788587860735,
         'grad_clip_value': 0.1,
+        'include_warmup_support': True,
         'lambda_eata': 1.3314323308399154,
         'learning_rate': 0.0004943260953204557,
         'lr_decay': 0.6947511865510675,
@@ -627,19 +623,18 @@ EEG_ACCUP_SCENARIO_OVERRIDES = {
         'momentum': 0.8079469220282296,
         'num_epochs': 40,
         'pre_learning_rate': 0.00047104669927932734,
-        'quantile': 0.60,
+        'quantile': 0.6,
         'safety_keep_frac': 0.09984190941199379,
         'step_size': 15,
         'steps': 4,
         'tau': 10,
         'temperature': 1.521640273730759,
-        'train_full_backbone': False,
-        'train_backbone_modules': ['conv_block1', 'conv_block2'],  # 只调 BN 仿射
+        'train_backbone_modules': ['conv_block1', 'conv_block2'],
         'train_classifier': True,
+        'train_full_backbone': False,
         'use_quantile': False,
         'warmup_min': 64,
         'weight_decay': 2.0322884602495502e-05,
-        'include_warmup_support': True,
     },
 
     backbone_scenario('TimesNet', 0, 11): {

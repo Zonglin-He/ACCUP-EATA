@@ -38,14 +38,14 @@ STUDY_DB = REPO_ROOT / "optuna.db"
 # Search scenarios and shared options -----------------------------------------
 # ------------------------------------------------------------------------------
 SCENARIO_GROUPS: List[List[Dict[str, int]]] = [
-[{"src": 0, "trg": 1}],
+[{"src": 7, "trg": 18}],
 ]
 
 DEFAULT_N_TRIALS = 100
 DEFAULT_RESUME = True
 
 DA_METHOD = "ACCUP"
-DATASET = "FD"
+DATASET = "EEG"
 BACKBONE = "CNN"
 NUM_RUNS = 1
 DEVICE = "cuda"
