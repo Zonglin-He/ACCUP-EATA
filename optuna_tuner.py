@@ -407,10 +407,6 @@ def _suggest_fd12_accup_params(
     def float_range(name, low, high, *, log=False):
         return trial.suggest_float(name, low, high, log=log)
 
-    def bool_flag(name, default=False):
-        # 打开 drop_last 的概率极低，靠权重即可
-        return trial.suggest_categorical(name, [default, not default])
-
     batch_base = None
     if train_params and "batch_size" in train_params:
         batch_base = int(train_params["batch_size"])
@@ -443,8 +439,8 @@ def _suggest_fd12_accup_params(
         ),
         "grad_clip": float_range("fd12_grad_clip", 0.45, 1.4),
         "grad_clip_value": trial.suggest_categorical("fd12_grad_clip_value", [None, 0.25, 0.5, 1.0]),
-        "drop_last_test": bool_flag("fd12_drop_last_test", default=False),
-        "drop_last_eval": bool_flag("fd12_drop_last_eval", default=False),
+        "drop_last_test": False,
+        "drop_last_eval": False,
     }
 
     return fd_params

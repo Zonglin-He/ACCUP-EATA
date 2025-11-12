@@ -38,7 +38,7 @@ STUDY_DB = REPO_ROOT / "optuna.db"
 # Search scenarios and shared options -----------------------------------------
 # ------------------------------------------------------------------------------
 SCENARIO_GROUPS: List[List[Dict[str, int]]] = [
-[{"src": 1, "trg": 0}],
+[{"src": 1, "trg": 2}],
 ]
 
 DEFAULT_N_TRIALS = 100
@@ -62,7 +62,11 @@ def build_args(group_id: int, scenarios: List[Dict[str, int]], *, n_trials: int,
     """Construct the Namespace that optuna_tuner.main() expects."""
     tag = f"{DATASET.lower()}_{BACKBONE.lower()}"
     scenario_specs = [f"{cfg['src']}->{cfg['trg']}" for cfg in scenarios]
-    study_name = f"{tag}_group{group_id}"
+    if len(scenario_specs) == 1:
+        trail = scenario_specs[0].replace("->", "to")
+        study_name = f"{tag}_{trail}"
+    else:
+        study_name = f"{tag}_group{group_id}"
     return SimpleNamespace(
         save_dir=str(SAVE_ROOT),
         exp_name=tag,

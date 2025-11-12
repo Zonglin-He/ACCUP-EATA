@@ -158,6 +158,7 @@ class ACCUP(BaseTestTimeAlgorithm):
                 warmup_min=int(hp['warmup_min']),
                 use_quantile=bool(hp['use_quantile']),
                 quantile=float(hp['quantile']),
+                e_margin_min=float(hp.get('e_margin_min', 0.25)),
                 safety_keep_frac=float(hp['safety_keep_frac']),
             )
         else:
@@ -450,4 +451,3 @@ class ACCUP(BaseTestTimeAlgorithm):
                 term = ((p - theta0[n].to(device)) ** 2).sum()
                 reg = term if reg is None else (reg + term)
         return reg if reg is not None else torch.zeros([], device=device)
-
