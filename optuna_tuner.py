@@ -687,11 +687,32 @@ def objective(
     reference_hparams = dict(trainer._base_alg_hparams)
     anchor_override = trainer.get_scenario_override(*scenario_pairs[0])
     reference_hparams.update(anchor_override)
+    # Determine an upper bound for num_epochs: use scenario override if present,
+    # then train_params anchor, then CLI --max-num-epochs.
+    epoch_caps = []
+    if getattr(args, "max_num_epochs", None) is not None:
+        try:
+            epoch_caps.append(int(args.max_num_epochs))
+        except Exception:
+            pass
+    if "num_epochs" in trainer._train_params:
+        try:
+            epoch_caps.append(int(trainer._train_params["num_epochs"]))
+        except Exception:
+            pass
+    if "num_epochs" in anchor_override:
+        try:
+            epoch_caps.append(int(anchor_override["num_epochs"]))
+        except Exception:
+            pass
+    epoch_cap = min(epoch_caps) if epoch_caps else None
+
     trial_hparams = build_search_space(
         trial,
         args.da_method,
         reference_hparams,
         dict(trainer._train_params) if args.tune_train_params else None,
+        max_num_epochs=epoch_cap,
     )
     if args.backbone.lower() == "timesnet":
         trial_hparams.update(suggest_timesnet_params(trial, trainer.dataset_configs))

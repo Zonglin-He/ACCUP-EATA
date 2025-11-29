@@ -38,18 +38,19 @@ STUDY_DB = REPO_ROOT / "optuna.db"
 # Search scenarios and shared options -----------------------------------------
 # ------------------------------------------------------------------------------
 SCENARIO_GROUPS: List[List[Dict[str, int]]] = [
-[{"src": 7, "trg": 18}],
+[{"src": 0, "trg": 1}],
 ]
 
 DEFAULT_N_TRIALS = 100
 DEFAULT_RESUME = True
 
 DA_METHOD = "ACCUP"
-DATASET = "EEG"
+DATASET = "FD"
 BACKBONE = "CNN"
 NUM_RUNS = 1
 DEVICE = "cuda"
 SEED = 42
+MAX_NUM_EPOCHS = 36  # cap Optuna proposals to not exceed this epoch count
 
 
 def ensure_directories() -> None:
@@ -95,6 +96,7 @@ def build_args(group_id: int, scenarios: List[Dict[str, int]], *, n_trials: int,
         overrides_config=str(REPO_ROOT / "configs" / "tta_hparams_new.py"),
         search_span=0.3,
         sensitive_span_scale=2.0,
+        max_num_epochs=MAX_NUM_EPOCHS,
     )
 
 
@@ -134,6 +136,12 @@ def parse_cli_args() -> argparse.Namespace:
         help="Start a fresh Optuna study, ignoring previous results.",
     )
     parser.set_defaults(resume=DEFAULT_RESUME)
+    parser.add_argument(
+        "--max-num-epochs",
+        type=int,
+        default=MAX_NUM_EPOCHS,
+        help=f"Upper bound for num_epochs in Optuna search (default: {MAX_NUM_EPOCHS}).",
+    )
     return parser.parse_args()
 
 
@@ -145,4 +153,5 @@ def main(groups: Iterable[List[Dict[str, int]]], *, n_trials: int, resume: bool)
 
 if __name__ == "__main__":
     cli_args = parse_cli_args()
+    MAX_NUM_EPOCHS = cli_args.max_num_epochs
     main(SCENARIO_GROUPS, n_trials=cli_args.n_trials, resume=cli_args.resume)
