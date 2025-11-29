@@ -38,10 +38,10 @@ STUDY_DB = REPO_ROOT / "optuna.db"
 # Search scenarios and shared options -----------------------------------------
 # ------------------------------------------------------------------------------
 SCENARIO_GROUPS: List[List[Dict[str, int]]] = [
-[{"src": 0, "trg": 1}],
+[{"src": 1, "trg": 0}],
 ]
 
-DEFAULT_N_TRIALS = 50
+DEFAULT_N_TRIALS = 80
 DEFAULT_RESUME = True
 
 DA_METHOD = "ACCUP"
@@ -50,7 +50,7 @@ BACKBONE = "CNN"
 NUM_RUNS = 1
 DEVICE = "cuda"
 SEED = 42
-MAX_NUM_EPOCHS = 36  # cap Optuna proposals to not exceed this epoch count
+MAX_NUM_EPOCHS = 25  # cap Optuna proposals to not exceed this epoch count
 
 
 def ensure_directories() -> None:
