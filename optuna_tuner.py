@@ -504,10 +504,11 @@ def build_search_space(
     method: str,
     base_hparams: Dict[str, float],
     train_params: Optional[Dict[str, Any]] = None,
+    max_num_epochs: Optional[int] = None,
 ) -> Dict[str, float]:
     method = method.lower()
     if method == "accup":
-        return suggest_accup_params(trial, base_hparams, train_params)
+        return suggest_accup_params(trial, base_hparams, train_params, max_num_epochs=max_num_epochs)
     if method == "noadap":
         return {"pre_learning_rate": trial.suggest_float("pre_learning_rate", 1e-5, 1e-3, log=True)}
     raise NotImplementedError(f"No search space implemented for method {method}.")
