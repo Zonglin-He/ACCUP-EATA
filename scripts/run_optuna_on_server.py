@@ -41,7 +41,7 @@ SCENARIO_GROUPS: List[List[Dict[str, int]]] = [
 [{"src": 0, "trg": 1}],
 ]
 
-DEFAULT_N_TRIALS = 100
+DEFAULT_N_TRIALS = 50
 DEFAULT_RESUME = True
 
 DA_METHOD = "ACCUP"
