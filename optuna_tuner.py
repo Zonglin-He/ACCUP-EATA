@@ -297,6 +297,7 @@ def suggest_accup_params(
     trial: optuna.Trial,
     base_hparams: Dict[str, float],
     train_params: Optional[Dict[str, Any]] = None,
+    max_num_epochs: Optional[int] = None,
 ) -> Dict[str, float]:
     """Define search space for ACCUP + EATA."""
     base_ratio = max(0.05, float(SEARCH_SPAN))  # default relative span
@@ -371,6 +372,17 @@ def suggest_accup_params(
     suggestions["memory_size"] = int(base_hparams.get("memory_size", 2048))
     suggestions["warmup_min"] = int(base_hparams.get("warmup_min", 64))
     suggestions["max_fisher_updates"] = int(base_hparams.get("max_fisher_updates", -1))
+    if (
+        max_num_epochs is not None
+        and "num_epochs" in base_hparams
+        and not (train_params and "num_epochs" in train_params)
+    ):
+        # Clamp the base anchor when train_params is not driving num_epochs
+        suggestions["num_epochs"] = trial.suggest_int(
+            "num_epochs",
+            max(5, int(min(int(base_hparams["num_epochs"]), int(max_num_epochs)))),
+            int(min(int(base_hparams["num_epochs"]), int(max_num_epochs))),
+        )
 
     suggestions.update(_suggest_training_scope(trial))
 
