@@ -727,6 +727,17 @@ def objective(
         dict(trainer._train_params) if args.tune_train_params else None,
         max_num_epochs=epoch_cap,
     )
+
+    # Final clamp: never allow num_epochs above the computed cap
+    if epoch_cap is not None:
+        candidate = trial_hparams.get("num_epochs", epoch_cap)
+        try:
+            candidate_int = int(candidate)
+        except Exception:
+            candidate_int = int(epoch_cap)
+        trial_hparams["num_epochs"] = int(min(candidate_int, int(epoch_cap)))
+        # Also bound trainer train_params so downstream default merges stay within cap
+        trainer._train_params["num_epochs"] = int(min(trainer._train_params.get("num_epochs", epoch_cap), epoch_cap))
     if args.backbone.lower() == "timesnet":
         trial_hparams.update(suggest_timesnet_params(trial, trainer.dataset_configs))
 
