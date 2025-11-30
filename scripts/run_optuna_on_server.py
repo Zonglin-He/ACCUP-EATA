@@ -38,7 +38,7 @@ STUDY_DB = REPO_ROOT / "optuna.db"
 # Search scenarios and shared options -----------------------------------------
 # ------------------------------------------------------------------------------
 SCENARIO_GROUPS: List[List[Dict[str, int]]] = [
-[{"src": 1, "trg": 0}],
+[{"src": 1, "trg": 2}],
 ]
 
 DEFAULT_N_TRIALS = 80
