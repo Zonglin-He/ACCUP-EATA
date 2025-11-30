@@ -256,6 +256,7 @@ if __name__ == "__main__":
     # ========= Experiment settings ===============
     parser.add_argument('--num_runs', default=1, type=int, help='Number of consecutive run with different seeds')
     parser.add_argument('--device', default="cuda", type=str, help='cpu or cuda')
+    parser.add_argument('--seed', default=42, type=int, help='Random seed applied to every run in this invocation')
     parser.add_argument(
         '--scenario',
         action='append',
