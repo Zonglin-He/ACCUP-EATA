@@ -38,19 +38,24 @@ STUDY_DB = REPO_ROOT / "optuna.db"
 # Search scenarios and shared options -----------------------------------------
 # ------------------------------------------------------------------------------
 SCENARIO_GROUPS: List[List[Dict[str, int]]] = [
-[{"src": 3, "trg": 1}],
+    [{"src": 2, "trg": 11}],
+    [{"src": 6, "trg": 23}],
+    [{"src": 7, "trg": 13}],
+    [{"src": 9, "trg": 18}],
+    [{"src": 12, "trg": 16}],
 ]
 
-DEFAULT_N_TRIALS = 80
+DEFAULT_N_TRIALS = 50
 DEFAULT_RESUME = True
 
 DA_METHOD = "ACCUP"
-DATASET = "FD"
+DATASET = "HAR"
 BACKBONE = "CNN"
 NUM_RUNS = 1
 DEVICE = "cuda"
 SEED = 42
-MAX_NUM_EPOCHS = 25  # cap Optuna proposals to not exceed this epoch count
+SEEDS = [41, 42, 43]  # optional multi-seed sweep (comma-separated string passed to optuna_tuner)
+MAX_NUM_EPOCHS = 20  # cap Optuna proposals to not exceed this epoch count
 
 
 def ensure_directories() -> None:
@@ -78,6 +83,7 @@ def build_args(group_id: int, scenarios: List[Dict[str, int]], *, n_trials: int,
         num_runs=NUM_RUNS,
         device=DEVICE,
         seed=SEED,
+        seeds=",".join(str(s) for s in SEEDS),
         src_id=None,
         trg_id=None,
         scenarios=scenario_specs,
@@ -142,6 +148,12 @@ def parse_cli_args() -> argparse.Namespace:
         default=MAX_NUM_EPOCHS,
         help=f"Upper bound for num_epochs in Optuna search (default: {MAX_NUM_EPOCHS}).",
     )
+    parser.add_argument(
+        "--seeds",
+        type=str,
+        default=",".join(str(s) for s in SEEDS),
+        help=f"Comma-separated seeds used per trial (default: {SEEDS}).",
+    )
     return parser.parse_args()
 
 
@@ -154,4 +166,5 @@ def main(groups: Iterable[List[Dict[str, int]]], *, n_trials: int, resume: bool)
 if __name__ == "__main__":
     cli_args = parse_cli_args()
     MAX_NUM_EPOCHS = cli_args.max_num_epochs
+    SEEDS = [int(s.strip()) for s in str(cli_args.seeds).split(",") if s.strip()]
     main(SCENARIO_GROUPS, n_trials=cli_args.n_trials, resume=cli_args.resume)

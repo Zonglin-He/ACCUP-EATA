@@ -9,6 +9,7 @@ from typing import Any, Dict, Tuple, Optional, List
 
 import optuna
 import torch
+import numpy as np
 
 from trainers.tta_trainer import TTATrainer
 from configs.data_model_configs import get_dataset_class
@@ -30,6 +31,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--num-runs', default=3, type=int)
     parser.add_argument('--device', default='cuda', type=str)
     parser.add_argument('--seed', default=42, type=int)
+    parser.add_argument(
+        '--seeds',
+        type=str,
+        default=None,
+        help="Comma-separated list of seeds to average per trial (e.g., '40,41,42'). "
+             "If set, overrides --seed and runs one TTATrainer per seed, averaging metrics.",
+    )
     parser.add_argument(
         '--batch-size',
         type=int,
@@ -684,128 +692,149 @@ def objective(
     args: argparse.Namespace,
     scenarios: List[Tuple[str, str]],
 ) -> float:
-    trainer_args = make_trainer_args(args, trial.number)
-    trainer = TTATrainer(trainer_args)
-    batch_size_override = getattr(args, "batch_size", None)
-    if batch_size_override is not None:
-        batch_size_override = int(batch_size_override)
-        trainer._train_params['batch_size'] = batch_size_override
-        trainer.hparams['batch_size'] = batch_size_override
-
-    # Limit to the requested scenarios for this trial
-    scenario_pairs = [(str(src), str(trg)) for src, trg in scenarios]
-    trainer.dataset_configs.scenarios = scenario_pairs
-
-    # Sample new hyperparameters and apply before adaptation
-    reference_hparams = dict(trainer._base_alg_hparams)
-    anchor_override = trainer.get_scenario_override(*scenario_pairs[0])
-    reference_hparams.update(anchor_override)
-    # Determine an upper bound for num_epochs: use scenario override if present,
-    # then train_params anchor, then CLI --max-num-epochs.
-    epoch_caps = []
-    if getattr(args, "max_num_epochs", None) is not None:
+    # Build seed list (single seed fallback).
+    if getattr(args, "seeds", None):
         try:
-            epoch_caps.append(int(args.max_num_epochs))
-        except Exception:
-            pass
-    if "num_epochs" in trainer._train_params:
-        try:
-            epoch_caps.append(int(trainer._train_params["num_epochs"]))
-        except Exception:
-            pass
-    if "num_epochs" in anchor_override:
-        try:
-            epoch_caps.append(int(anchor_override["num_epochs"]))
-        except Exception:
-            pass
-    epoch_cap = min(epoch_caps) if epoch_caps else None
+            seed_list = [int(s.strip()) for s in str(args.seeds).split(",") if str(s).strip() != ""]
+        except Exception as exc:
+            raise ValueError(f"Unable to parse --seeds: {args.seeds}") from exc
+    else:
+        seed_list = [int(getattr(args, "seed", 42))]
 
-    trial_hparams = build_search_space(
-        trial,
-        args.da_method,
-        reference_hparams,
-        dict(trainer._train_params) if args.tune_train_params else None,
-        max_num_epochs=epoch_cap,
-    )
+    all_seed_metrics: Dict[int, Dict[str, Dict[str, float]]] = {}
+    all_f1: List[float] = []
 
-    # Final clamp: never allow num_epochs above the computed cap
-    if epoch_cap is not None:
-        candidate = trial_hparams.get("num_epochs", epoch_cap)
-        try:
-            candidate_int = int(candidate)
-        except Exception:
-            candidate_int = int(epoch_cap)
-        trial_hparams["num_epochs"] = int(min(candidate_int, int(epoch_cap)))
-        # Also bound trainer train_params so downstream default merges stay within cap
-        trainer._train_params["num_epochs"] = int(min(trainer._train_params.get("num_epochs", epoch_cap), epoch_cap))
-    if args.backbone.lower() == "timesnet":
-        trial_hparams.update(suggest_timesnet_params(trial, trainer.dataset_configs))
+    for seed in seed_list:
+        trainer_args = make_trainer_args(args, trial.number)
+        trainer_args.seed = seed
+        trainer = TTATrainer(trainer_args)
+        batch_size_override = getattr(args, "batch_size", None)
+        if batch_size_override is not None:
+            batch_size_override = int(batch_size_override)
+            trainer._train_params['batch_size'] = batch_size_override
+            trainer.hparams['batch_size'] = batch_size_override
 
-    def _needs_fd12_space() -> bool:
-        if args.dataset.lower() != "fd":
-            return False
-        if args.da_method.lower() != "accup":
-            return False
-        if len(scenario_pairs) != 1:
-            return False
-        src_id, trg_id = scenario_pairs[0]
-        return str(src_id) == "1" and str(trg_id) == "2"
+        # Limit to the requested scenarios for this trial
+        scenario_pairs = [(str(src), str(trg)) for src, trg in scenarios]
+        trainer.dataset_configs.scenarios = scenario_pairs
 
-    if _needs_fd12_space():
-        fd_specific = _suggest_fd12_accup_params(
+        # Sample new hyperparameters and apply before adaptation
+        reference_hparams = dict(trainer._base_alg_hparams)
+        anchor_override = trainer.get_scenario_override(*scenario_pairs[0])
+        reference_hparams.update(anchor_override)
+        # Determine an upper bound for num_epochs: use scenario override if present,
+        # then train_params anchor, then CLI --max-num-epochs.
+        epoch_caps = []
+        if getattr(args, "max_num_epochs", None) is not None:
+            try:
+                epoch_caps.append(int(args.max_num_epochs))
+            except Exception:
+                pass
+        if "num_epochs" in trainer._train_params:
+            try:
+                epoch_caps.append(int(trainer._train_params["num_epochs"]))
+            except Exception:
+                pass
+        if "num_epochs" in anchor_override:
+            try:
+                epoch_caps.append(int(anchor_override["num_epochs"]))
+            except Exception:
+                pass
+        epoch_cap = min(epoch_caps) if epoch_caps else None
+
+        trial_hparams = build_search_space(
             trial,
+            args.da_method,
             reference_hparams,
-            dict(trainer._train_params),
+            dict(trainer._train_params) if args.tune_train_params else None,
+            max_num_epochs=epoch_cap,
         )
-        trial_hparams.update(fd_specific)
 
-    for src_id, trg_id in scenario_pairs:
-        existing_override = trainer.get_scenario_override(src_id, trg_id)
-        combined_override = dict(existing_override)
-        combined_override.update(trial_hparams)
-        trainer.store_scenario_override(src_id, trg_id, combined_override)
-    trainer.hparams.update(trial_hparams)
+        # Final clamp: never allow num_epochs above the computed cap
+        if epoch_cap is not None:
+            candidate = trial_hparams.get("num_epochs", epoch_cap)
+            try:
+                candidate_int = int(candidate)
+            except Exception:
+                candidate_int = int(epoch_cap)
+            trial_hparams["num_epochs"] = int(min(candidate_int, int(epoch_cap)))
+            # Also bound trainer train_params so downstream default merges stay within cap
+            trainer._train_params["num_epochs"] = int(min(trainer._train_params.get("num_epochs", epoch_cap), epoch_cap))
+        if args.backbone.lower() == "timesnet":
+            trial_hparams.update(suggest_timesnet_params(trial, trainer.dataset_configs))
 
-    try:
-        trainer.test_time_adaptation()
-    except RuntimeError as exc:
-        message = str(exc).lower()
-        if "out of memory" in message:
+        def _needs_fd12_space() -> bool:
+            if args.dataset.lower() != "fd":
+                return False
+            if args.da_method.lower() != "accup":
+                return False
+            if len(scenario_pairs) != 1:
+                return False
+            src_id, trg_id = scenario_pairs[0]
+            return str(src_id) == "1" and str(trg_id) == "2"
+
+        if _needs_fd12_space():
+            fd_specific = _suggest_fd12_accup_params(
+                trial,
+                reference_hparams,
+                dict(trainer._train_params),
+            )
+            trial_hparams.update(fd_specific)
+
+        for src_id, trg_id in scenario_pairs:
+            existing_override = trainer.get_scenario_override(src_id, trg_id)
+            combined_override = dict(existing_override)
+            combined_override.update(trial_hparams)
+            trainer.store_scenario_override(src_id, trg_id, combined_override)
+        trainer.hparams.update(trial_hparams)
+
+        try:
+            trainer.test_time_adaptation()
+        except RuntimeError as exc:
+            message = str(exc).lower()
+            if "out of memory" in message:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                raise optuna.exceptions.TrialPruned("CUDA out of memory during adaptation") from exc
+            raise
+        finally:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            raise optuna.exceptions.TrialPruned("CUDA out of memory during adaptation") from exc
-        raise
-    finally:
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
 
-    trial_metrics: Dict[str, Dict[str, float]] = {}
-    aggregated_f1: List[float] = []
+        trial_metrics: Dict[str, Dict[str, float]] = {}
 
-    for src_id, trg_id in scenario_pairs:
-        key = (str(src_id), str(trg_id))
-        metrics = trainer.scenario_metrics.get(key)
-        if metrics is None:
-            raise RuntimeError(f"No metrics recorded for scenario {format_scenario_key(*key)}.")
-        scenario_key = format_scenario_key(*key)
-        trial_metrics[scenario_key] = metrics
-        aggregated_f1.append(float(metrics["f1_mean"]))
-        for stat_key, stat_value in metrics.items():
-            attr_name = f"{scenario_key}.{stat_key}"
-            trial.set_user_attr(attr_name, stat_value)
+        for src_id, trg_id in scenario_pairs:
+            key = (str(src_id), str(trg_id))
+            metrics = trainer.scenario_metrics.get(key)
+            if metrics is None:
+                raise RuntimeError(f"No metrics recorded for scenario {format_scenario_key(*key)}.")
+            scenario_key = format_scenario_key(*key)
+            trial_metrics[scenario_key] = metrics
+            all_f1.append(float(metrics["f1_mean"]))
+            for stat_key, stat_value in metrics.items():
+                attr_name = f"{scenario_key}.seed{seed}.{stat_key}"
+                trial.set_user_attr(attr_name, stat_value)
 
-    if not trial_metrics:
-        raise RuntimeError("Trainer did not record any scenario metrics.")
+        all_seed_metrics[seed] = trial_metrics
 
-    objective_value = float(sum(aggregated_f1) / len(aggregated_f1))
-    trial.set_user_attr("metrics", trial_metrics)
-    trial.set_user_attr("scenario_keys", list(trial_metrics.keys()))
+    if not all_seed_metrics:
+        raise RuntimeError("No metrics recorded for any seed.")
 
+    mean_f1 = float(sum(all_f1) / len(all_f1))
+    var_f1 = float(np.var(np.array(all_f1))) if all_f1 else 0.0
+    std_f1 = float(np.sqrt(var_f1))
+    trial.set_user_attr("seeds", seed_list)
+    trial.set_user_attr("metrics_by_seed", all_seed_metrics)
+    trial.set_user_attr("f1_mean", mean_f1)
+    trial.set_user_attr("f1_std", std_f1)
+
+    # Also expose hparams used (same across seeds within a trial)
     for key, value in trial_hparams.items():
         trial.set_user_attr(f"hparam_{key}", value)
-    trial.set_user_attr("objective_avg_f1", objective_value)
 
-    # Maximize macro F1 score by default
+    # Objective: maximize mean F1 while penalizing variance
+    objective_value = mean_f1 - std_f1
+    trial.set_user_attr("objective", objective_value)
     return objective_value
 
 
