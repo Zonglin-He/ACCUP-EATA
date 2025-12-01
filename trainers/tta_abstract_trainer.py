@@ -321,15 +321,20 @@ class TTAAbstractTrainer(object):
 
         return src_risk, trg_risk
 
-    def append_results_to_tables(self, table, scenario, run_id, metrics):
+    def append_results_to_tables(self, table, scenario, run_id, metrics, seed=None):
         # 将新的结果添加到表中
+        row = [scenario]
+        if "seed" in table.columns:
+            row.append(seed if seed is not None else getattr(self, "seed", None))
+        row.append(run_id)
+
         if isinstance(metrics, float):
-            results_row = [scenario, run_id, metrics]
+            row.append(metrics)
         elif isinstance(metrics, tuple):
-            results_row = [scenario, run_id, *metrics]
+            row.extend(metrics)
 
         # Create new dataframes for each row
-        results_df = pd.DataFrame([results_row], columns=table.columns)
+        results_df = pd.DataFrame([row], columns=table.columns)
 
         # Concatenate new dataframes with original dataframes
         table = pd.concat([table, results_df], ignore_index=True)
@@ -338,12 +343,19 @@ class TTAAbstractTrainer(object):
 
     def add_mean_std_table(self, table, columns): #计算表格的各指标列的平均值和标准差，并将其添加到结果表中
         # Calculate average and standard deviation for metrics
-        avg_metrics = [table[metric].mean() for metric in columns[2:]]
-        std_metrics = [table[metric].std() for metric in columns[2:]]
+        metric_start_idx = 3 if "seed" in columns else 2
+        metric_cols = columns[metric_start_idx:]
+        avg_metrics = [table[metric].mean() for metric in metric_cols]
+        std_metrics = [table[metric].std() for metric in metric_cols]
 
         # Create dataframes for mean and std values
-        mean_metrics_df = pd.DataFrame([['mean', '-', *avg_metrics]], columns=columns)
-        std_metrics_df = pd.DataFrame([['std', '-', *std_metrics]], columns=columns)
+        prefix = ['mean', '-']
+        prefix_std = ['std', '-']
+        if "seed" in columns:
+            prefix.insert(1, '-')
+            prefix_std.insert(1, '-')
+        mean_metrics_df = pd.DataFrame([prefix + avg_metrics], columns=columns)
+        std_metrics_df = pd.DataFrame([prefix_std + std_metrics], columns=columns)
 
         # Concatenate original dataframes with mean and std dataframes
         table = pd.concat([table, mean_metrics_df, std_metrics_df], ignore_index=True)

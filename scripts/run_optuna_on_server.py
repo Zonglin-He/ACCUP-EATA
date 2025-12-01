@@ -38,24 +38,23 @@ STUDY_DB = REPO_ROOT / "optuna.db"
 # Search scenarios and shared options -----------------------------------------
 # ------------------------------------------------------------------------------
 SCENARIO_GROUPS: List[List[Dict[str, int]]] = [
-    [{"src": 2, "trg": 11}],
-    [{"src": 6, "trg": 23}],
-    [{"src": 7, "trg": 13}],
-    [{"src": 9, "trg": 18}],
-    [{"src": 12, "trg": 16}],
+[{"src": 1, "trg": 0}],
+[{"src": 3, "trg": 1}],
+[{"src": 2, "trg": 3}],
+
 ]
 
 DEFAULT_N_TRIALS = 50
 DEFAULT_RESUME = True
 
 DA_METHOD = "ACCUP"
-DATASET = "HAR"
+DATASET = "FD"
 BACKBONE = "CNN"
 NUM_RUNS = 1
 DEVICE = "cuda"
 SEED = 42
-SEEDS = [41, 42, 43]  # optional multi-seed sweep (comma-separated string passed to optuna_tuner)
-MAX_NUM_EPOCHS = 20  # cap Optuna proposals to not exceed this epoch count
+SEEDS = [41,42,43]  # optional multi-seed sweep (comma-separated string passed to optuna_tuner)
+MAX_NUM_EPOCHS = 25  # cap Optuna proposals to not exceed this epoch count
 
 
 def ensure_directories() -> None:
@@ -95,7 +94,7 @@ def build_args(group_id: int, scenarios: List[Dict[str, int]], *, n_trials: int,
         resume=resume,
         tune_train_params=True,
         pretrain_cache_dir=str(PRETRAIN_CACHE),
-        disable_pretrain_cache=True,  # force fresh pretrain per seed/trial to match formal runs
+        disable_pretrain_cache=False,  # allow cache so seeds share pretrain weights
         viz_dir=None,
         best_summary_path=None,
         write_overrides=True,

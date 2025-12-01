@@ -65,9 +65,9 @@ class TTATrainer(TTAAbstractTrainer):
 
     def test_time_adaptation(self):
         """Entry point for running test-time adaptation."""
-        results_columns = ["scenario", "run", "acc", "f1_score", "auroc"]
+        results_columns = ["scenario", "seed", "run", "acc", "f1_score", "auroc"]
         table_results = pd.DataFrame(columns=results_columns)
-        risks_columns = ["scenario", "run", "trg_risk"]
+        risks_columns = ["scenario", "seed", "run", "trg_risk"]
         table_risks = pd.DataFrame(columns=risks_columns)
 
         # Reset caches so repeated calls do not leak state
@@ -136,8 +136,8 @@ class TTATrainer(TTAAbstractTrainer):
                 metrics = self.calculate_metrics(tta_model)
                 cur_scenario_metrics.append(metrics)
                 cur_scenario_f1_ret.append(metrics[1])
-                table_results = self.append_results_to_tables(table_results, scenario, run_id, metrics[:3])
-                table_risks = self.append_results_to_tables(table_risks, scenario, run_id, metrics[-1])
+                table_results = self.append_results_to_tables(table_results, scenario, run_id, metrics[:3], seed=self.seed)
+                table_risks = self.append_results_to_tables(table_risks, scenario, run_id, metrics[-1], seed=self.seed)
 
             if cur_scenario_metrics:
                 metrics_array = np.array(cur_scenario_metrics)
@@ -221,11 +221,18 @@ class TTATrainer(TTAAbstractTrainer):
         cache_path = self._pretrain_cache_path()
         if cache_path and os.path.exists(cache_path):
             print(f"Loading cached pre-training weights from {cache_path}")
-            payload = torch.load(cache_path, map_location=self.device)
-            cached_model = self.initialize_pretrained_model()
-            cached_model.load_state_dict(payload["model_state"])
-            cached_model = cached_model.to(self.device)
-            return payload["non_adapted"], cached_model
+            try:
+                payload = torch.load(cache_path, map_location=self.device)
+                cached_model = self.initialize_pretrained_model()
+                cached_model.load_state_dict(payload["model_state"])
+                cached_model = cached_model.to(self.device)
+                return payload["non_adapted"], cached_model
+            except Exception as exc:
+                print(f"Failed to load cache ({exc}); re-training from scratch and refreshing cache.")
+                try:
+                    os.remove(cache_path)
+                except OSError:
+                    pass
 
         non_adapted_model_state, pre_trained_model = super(TTATrainer, self).pre_train()
 
@@ -258,6 +265,23 @@ if __name__ == "__main__":
     parser.add_argument('--device', default="cuda", type=str, help='cpu or cuda')
     parser.add_argument('--seed', default=42, type=int, help='Random seed applied to every run in this invocation')
     parser.add_argument(
+        '--seeds',
+        type=str,
+        default=None,
+        help="Comma-separated seeds to run sequentially (e.g., '41,42,43'). Overrides --seed when provided.",
+    )
+    parser.add_argument(
+        '--pretrain_cache_dir',
+        type=str,
+        default=None,
+        help="Optional directory to cache/reuse pre-training weights across runs.",
+    )
+    parser.add_argument(
+        '--disable_pretrain_cache',
+        action='store_true',
+        help="Force pre-training from scratch even if a cache directory is provided.",
+    )
+    parser.add_argument(
         '--scenario',
         action='append',
         default=None,
@@ -266,20 +290,38 @@ if __name__ == "__main__":
             "Example: --scenario 7->18 --scenario 16->1. "
             "If omitted, all dataset-defined scenarios will be evaluated."
         ),
-)
+    )
 
     args = parser.parse_args()
-    trainer = TTATrainer(args)
-    if args.scenario:
-        selected_pairs = []
-        for entry in args.scenario:
-            if '->' in entry:
-                src, trg = entry.split('->', 1)
-            elif ',' in entry:
-                src, trg = entry.split(',', 1)
-            else:
-                raise ValueError(f"Invalid scenario format '{entry}'. Expected 'src->trg'.")
-            selected_pairs.append((src.strip(), trg.strip()))
-        trainer.dataset_configs.scenarios = selected_pairs
 
-    trainer.test_time_adaptation()
+    def _run_single(seed_args):
+        trainer = TTATrainer(seed_args)
+        if seed_args.scenario:
+            selected_pairs = []
+            for entry in seed_args.scenario:
+                if '->' in entry:
+                    src, trg = entry.split('->', 1)
+                elif ',' in entry:
+                    src, trg = entry.split(',', 1)
+                else:
+                    raise ValueError(f"Invalid scenario format '{entry}'. Expected 'src->trg'.")
+                selected_pairs.append((str(src), str(trg)))
+            trainer.dataset_configs.scenarios = selected_pairs
+        trainer.test_time_adaptation()
+
+    if args.seeds:
+        try:
+            seed_list = [int(s.strip()) for s in args.seeds.split(',') if s.strip()]
+        except Exception as exc:
+            raise ValueError(f"Unable to parse --seeds='{args.seeds}'") from exc
+    else:
+        seed_list = [getattr(args, 'seed', 42)]
+
+    base_exp_name = args.exp_name
+    multiple = len(seed_list) > 1
+    for seed in seed_list:
+        seed_args = argparse.Namespace(**vars(args))
+        seed_args.seed = seed
+        if multiple:
+            seed_args.exp_name = f"{base_exp_name}_seed{seed}"
+        _run_single(seed_args)
