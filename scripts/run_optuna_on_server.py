@@ -95,7 +95,7 @@ def build_args(group_id: int, scenarios: List[Dict[str, int]], *, n_trials: int,
         resume=resume,
         tune_train_params=True,
         pretrain_cache_dir=str(PRETRAIN_CACHE),
-        disable_pretrain_cache=False,
+        disable_pretrain_cache=True,  # force fresh pretrain per seed/trial to match formal runs
         viz_dir=None,
         best_summary_path=None,
         write_overrides=True,
