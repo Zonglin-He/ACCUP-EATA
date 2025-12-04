@@ -165,6 +165,12 @@ class ACCUP(BaseTestTimeAlgorithm):
             sel = torch.arange(r_output.size(0), device=r_output.device)
             log_str = '[EATA] using full batch (selection disabled)'
 
+        # 统计被选中的样本数（用于绘制累积/成本曲线）
+        try:
+            self._selected_counter = getattr(self, "_selected_counter", 0) + int(sel.numel())
+        except Exception:
+            pass
+
         print(f"[EATA] select={self.use_eata_select}, reg={self.use_eata_reg}")
         if self.use_eata_select:
             print(f"[EATA] selected {int(sel.numel())}/{r_output.size(0)}")

@@ -129,6 +129,12 @@ class TTATrainer(TTAAbstractTrainer):
                         tta_model.eata_memory = self.eata_memory
 
                     tta_model.select_eata_indices = select_eata_indices
+                    # 记录目标集总样本，用于成本统计
+                    try:
+                        tta_model._total_samples = len(self.trg_whole_dl.dataset)
+                        tta_model._selected_counter = 0
+                    except Exception:
+                        pass
 
                 tta_model.to(self.device)
                 pre_trained_model.eval()
@@ -138,6 +144,18 @@ class TTATrainer(TTAAbstractTrainer):
                 cur_scenario_f1_ret.append(metrics[1])
                 table_results = self.append_results_to_tables(table_results, scenario, run_id, metrics[:3], seed=self.seed)
                 table_risks = self.append_results_to_tables(table_risks, scenario, run_id, metrics[-1], seed=self.seed)
+
+                # 输出/保存选样统计（若算法有记录）
+                sel_cnt = getattr(tta_model, "_selected_counter", None)
+                total_cnt = getattr(tta_model, "_total_samples", None)
+                if sel_cnt is not None and total_cnt is not None:
+                    stat_line = f"[SelStats] scenario={scenario} seed={self.seed} selected={sel_cnt}/{total_cnt} ({100.0*sel_cnt/total_cnt:.2f}%)"
+                    print(stat_line)
+                    try:
+                        with open(os.path.join(self.scenario_log_dir, "selected_stats.txt"), "a") as f:
+                            f.write(stat_line + "\n")
+                    except Exception:
+                        pass
 
             if cur_scenario_metrics:
                 metrics_array = np.array(cur_scenario_metrics)
