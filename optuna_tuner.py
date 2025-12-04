@@ -466,6 +466,78 @@ def _suggest_fd12_accup_params(
     return fd_params
 
 
+def _suggest_fd10_accup_params(
+    trial: optuna.Trial,
+    base_hparams: Dict[str, Any],
+    train_params: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    FD 1→0 搜索空间：更偏向放开 BN、加大学习率/记忆缓冲，围绕手动调参的有效区间。
+    """
+
+    def int_choice(name, default, *, low=None, high=None, step=1, candidates=None):
+        if candidates is not None:
+            return trial.suggest_categorical(name, candidates)
+        base = int(default)
+        lo = low if low is not None else max(8, base - step * 6)
+        hi = high if high is not None else base + step * 6
+        if lo >= hi:
+            hi = lo + step
+        return trial.suggest_int(name, lo, hi, step=step)
+
+    def float_range(name, low, high, *, log=False):
+        return trial.suggest_float(name, low, high, log=log)
+
+    batch_base = None
+    if train_params and "batch_size" in train_params:
+        batch_base = int(train_params["batch_size"])
+    elif "batch_size" in base_hparams:
+        batch_base = int(base_hparams["batch_size"])
+    batch_base = batch_base or 128
+
+    batch_choice = int_choice("fd10_batch_size", batch_base, low=96, high=192, step=8)
+    # 让 lr 对 batch 尺寸具备弹性缩放：lr = base * (batch/128)^alpha
+    lr_base = float_range("fd10_learning_rate_base", 3.0e-5, 1.2e-4, log=True)
+    lr_alpha = float_range("fd10_learning_rate_alpha", -0.6, 0.4)
+    lr_final = lr_base * (batch_choice / 128.0) ** lr_alpha
+
+    pre_lr_base = float_range("fd10_pre_lr_base", 1.5e-4, 6.0e-4, log=True)
+    pre_lr_alpha = float_range("fd10_pre_lr_alpha", -0.4, 0.3)
+    pre_lr_final = pre_lr_base * (batch_choice / 128.0) ** pre_lr_alpha
+
+    fd_params: Dict[str, Any] = {
+        "batch_size": batch_choice,
+        "learning_rate": lr_final,
+        "pre_learning_rate": pre_lr_final,
+        "filter_K": int_choice("fd10_filter_K", base_hparams.get("filter_K", 19), low=15, high=45, step=2),
+        "quantile": float_range("fd10_quantile", 0.45, 0.7),
+        "temperature": float_range("fd10_temperature", 0.7, 1.3),
+        "tau": int_choice("fd10_tau", base_hparams.get("tau", 6), low=6, high=12, step=1),
+        "lambda_eata": float_range("fd10_lambda_eata", 0.8, 2.0),
+        "e_margin_scale": float_range("fd10_e_margin_scale", 0.5, 0.9),
+        "d_margin": float_range("fd10_d_margin", 0.02, 0.08),
+        "safety_keep_frac": float_range("fd10_safety_keep_frac", 0.2, 0.35),
+        "memory_size": int_choice(
+            "fd10_memory_size",
+            base_hparams.get("memory_size", 1024),
+            candidates=[1024, 1536, 1792, 2048, 2560, 3072, 3584, 4096],
+        ),
+        "warmup_min": int_choice("fd10_warmup_min", base_hparams.get("warmup_min", 200), low=120, high=208, step=16),
+        "max_fisher_updates": int_choice(
+            "fd10_max_fisher_updates",
+            base_hparams.get("max_fisher_updates", 192),
+            candidates=[128, 160, 192, 224, 256, 288, 320],
+        ),
+        "grad_clip": float_range("fd10_grad_clip", 0.4, 0.8),
+        "grad_clip_value": trial.suggest_categorical("fd10_grad_clip_value", [None, 0.25, 0.5, 1.0]),
+        "freeze_bn_stats": trial.suggest_categorical("fd10_freeze_bn_stats", [False, True]),
+        "train_full_backbone": trial.suggest_categorical("fd10_train_full_backbone", [True, False]),
+        "steps": trial.suggest_categorical("fd10_steps", [1, 2]),
+    }
+
+    return fd_params
+
+
 def suggest_timesnet_params(trial: optuna.Trial, dataset_cfg) -> Dict[str, Any]:
     """Define a lightweight search space for TimesNet backbone hyperparameters."""
     seq_len = getattr(dataset_cfg, "sequence_len", 512)
@@ -773,8 +845,26 @@ def objective(
             src_id, trg_id = scenario_pairs[0]
             return str(src_id) == "1" and str(trg_id) == "2"
 
+        def _needs_fd10_space() -> bool:
+            if args.dataset.lower() != "fd":
+                return False
+            if args.da_method.lower() != "accup":
+                return False
+            if len(scenario_pairs) != 1:
+                return False
+            src_id, trg_id = scenario_pairs[0]
+            return str(src_id) == "1" and str(trg_id) == "0"
+
         if _needs_fd12_space():
             fd_specific = _suggest_fd12_accup_params(
+                trial,
+                reference_hparams,
+                dict(trainer._train_params),
+            )
+            trial_hparams.update(fd_specific)
+
+        if _needs_fd10_space():
+            fd_specific = _suggest_fd10_accup_params(
                 trial,
                 reference_hparams,
                 dict(trainer._train_params),
