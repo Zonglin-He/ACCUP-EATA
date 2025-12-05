@@ -503,7 +503,8 @@ FD_ACCUP_SCENARIO_OVERRIDES = {
 
 EEG_ACCUP_SCENARIO_OVERRIDES = {
     backbone_scenario('CNN', 0, 11): {
-        'batch_size': 128,
+        'batch_size': 96,
+        'd_margin': 0.1,
         'e_margin_scale': 0.3,
         'filter_K': 18,
         'fisher_alpha': 1000,
@@ -513,15 +514,17 @@ EEG_ACCUP_SCENARIO_OVERRIDES = {
         'include_warmup_support': True,
         'learning_rate': 3e-05,
         'lr_decay': 0.5,
+        'lambda_eata': 0.2,
         'max_fisher_updates': 256,
+        'memory_size': 3328,
         'momentum': 0.6,
         'num_epochs': 30,
         'online_fisher': True,
-        'quantile': 0.1,
+        'quantile': 0.3,
         'safety_keep_frac': 0.3,
         'step_size': 10,
         'steps': 1,
-        'tau': 8,
+        'tau': 5, #5
         'temperature': 0.9,
         'train_backbone_modules': ['conv_block1', 'conv_block2'],
         'train_classifier': True,

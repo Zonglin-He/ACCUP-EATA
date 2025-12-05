@@ -410,57 +410,12 @@ def _suggest_fd12_accup_params(
     train_params: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    专门针对 FD 1→2 的 ACCUP 空间：允许更宽的范围（含 batch_size/drop_last 之类），
-    方便冲击 90+ 宏 F1。
+    FD 1→2：仅搜索 learning_rate 和 pre_learning_rate，其他保持当前场景超参不变。
     """
 
-    def int_choice(name, default, *, low=None, high=None, step=1, candidates=None):
-        if candidates is not None:
-            return trial.suggest_categorical(name, candidates)
-        base = int(default)
-        lo = low if low is not None else max(8, base - step * 8)
-        hi = high if high is not None else base + step * 8
-        if lo >= hi:
-            hi = lo + step
-        return trial.suggest_int(name, lo, hi, step=step)
-
-    def float_range(name, low, high, *, log=False):
-        return trial.suggest_float(name, low, high, log=log)
-
-    batch_base = None
-    if train_params and "batch_size" in train_params:
-        batch_base = int(train_params["batch_size"])
-    elif "batch_size" in base_hparams:
-        batch_base = int(base_hparams["batch_size"])
-    batch_base = batch_base or 128
-
     fd_params: Dict[str, Any] = {
-        "batch_size": int_choice("fd12_batch_size", batch_base, low=80, high=192, step=8),
-        "learning_rate": float_range("fd12_learning_rate", 2.0e-5, 1.5e-4, log=True),
-        "pre_learning_rate": float_range("fd12_pre_lr", 4.0e-5, 2.0e-4, log=True),
-        "filter_K": int_choice("fd12_filter_K", base_hparams.get("filter_K", 34), low=18, high=64, step=2),
-        "quantile": float_range("fd12_quantile", 0.45, 0.78),
-        "temperature": float_range("fd12_temperature", 0.45, 1.6),
-        "tau": int_choice("fd12_tau", base_hparams.get("tau", 14), low=8, high=28, step=1),
-        "lambda_eata": float_range("fd12_lambda_eata", 0.6, 2.4),
-        "e_margin_scale": float_range("fd12_e_margin_scale", 0.35, 0.85),
-        "d_margin": float_range("fd12_d_margin", 0.005, 0.13),
-        "safety_keep_frac": float_range("fd12_safety_keep_frac", 0.2, 0.6),
-        "memory_size": int_choice(
-            "fd12_memory_size",
-            base_hparams.get("memory_size", 2816),
-            candidates=[1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840],
-        ),
-        "warmup_min": int_choice("fd12_warmup_min", base_hparams.get("warmup_min", 160), low=80, high=256, step=16),
-        "max_fisher_updates": int_choice(
-            "fd12_max_fisher_updates",
-            base_hparams.get("max_fisher_updates", 256),
-            candidates=[128, 192, 256, 320, 384, 448, 512, 640],
-        ),
-        "grad_clip": float_range("fd12_grad_clip", 0.45, 1.4),
-        "grad_clip_value": trial.suggest_categorical("fd12_grad_clip_value", [None, 0.25, 0.5, 1.0]),
-        "drop_last_test": False,
-        "drop_last_eval": False,
+        "learning_rate": trial.suggest_float("fd12_learning_rate", 1e-6, 3e-4, log=True),
+        "pre_learning_rate": trial.suggest_float("fd12_pre_learning_rate", 5e-5, 1e-3, log=True),
     }
 
     return fd_params
@@ -780,8 +735,13 @@ def objective(
 
         # --- Build search space ---
         if _needs_fd10_space():
-            # 只搜索 batch_size，其他超参保持基线
             trial_hparams = _suggest_fd10_accup_params(
+                trial,
+                reference_hparams,
+                dict(trainer._train_params),
+            )
+        elif _needs_fd12_space():
+            trial_hparams = _suggest_fd12_accup_params(
                 trial,
                 reference_hparams,
                 dict(trainer._train_params),
@@ -807,22 +767,6 @@ def objective(
                 trainer._train_params["num_epochs"] = int(min(trainer._train_params.get("num_epochs", epoch_cap), epoch_cap))
             if args.backbone.lower() == "timesnet":
                 trial_hparams.update(suggest_timesnet_params(trial, trainer.dataset_configs))
-
-        if _needs_fd12_space():
-            fd_specific = _suggest_fd12_accup_params(
-                trial,
-                reference_hparams,
-                dict(trainer._train_params),
-            )
-            trial_hparams.update(fd_specific)
-
-        if _needs_fd10_space():
-            fd_specific = _suggest_fd10_accup_params(
-                trial,
-                reference_hparams,
-                dict(trainer._train_params),
-            )
-            trial_hparams.update(fd_specific)
 
         for src_id, trg_id in scenario_pairs:
             existing_override = trainer.get_scenario_override(src_id, trg_id)
