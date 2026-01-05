@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import sys
+import ast
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -63,6 +64,34 @@ class TTATrainer(TTAAbstractTrainer):
         mem_len = int(self.hparams.get('memory_size', 4096)) if hasattr(self, 'hparams') else 4096
         self.eata_memory = EATAMemory(maxlen=mem_len, device=self.device)
 
+    def _log_active_nustar_hparams(self, scenario):
+        keys = [
+            "adv_sigmas",
+            "sem_thresh",
+            "cons_thresh",
+            "stat_quantile",
+            "stat_window",
+            "stat_min_history",
+            "stat_min_entropy",
+            "proto_momentum",
+            "lambda_reg",
+            "fisher_alpha",
+            "online_fisher",
+            "max_fisher_updates",
+            "freeze_bn_stats",
+            "train_full_backbone",
+            "train_classifier",
+            "steps",
+        ]
+        payload = {k: self.hparams.get(k, None) for k in keys}
+        line = f"[HParams] scenario={scenario} seed={self.seed} run={self.run_id} {payload}"
+        print(line)
+        try:
+            with open(os.path.join(self.scenario_log_dir, "active_hparams.txt"), "a") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+
     def test_time_adaptation(self):
         """Entry point for running test-time adaptation."""
         results_columns = ["scenario", "seed", "run", "acc", "f1_score", "auroc"]
@@ -95,6 +124,9 @@ class TTATrainer(TTAAbstractTrainer):
                 )
                 self.pre_loss_avg_meters = collections.defaultdict(lambda: AverageMeter())
                 self.loss_avg_meters = collections.defaultdict(lambda: AverageMeter())
+
+                if self.da_method != "NoAdap":
+                    self._log_active_nustar_hparams(scenario)
 
                 # Refresh memory buffer for each run to avoid cross-scenario leakage
                 mem_len = int(self.hparams.get('memory_size', 4096)) if hasattr(self, 'hparams') else 4096
@@ -149,7 +181,13 @@ class TTATrainer(TTAAbstractTrainer):
                 sel_cnt = getattr(tta_model, "_selected_counter", None)
                 total_cnt = getattr(tta_model, "_total_samples", None)
                 if sel_cnt is not None and total_cnt is not None:
-                    stat_line = f"[SelStats] scenario={scenario} seed={self.seed} selected={sel_cnt}/{total_cnt} ({100.0*sel_cnt/total_cnt:.2f}%)"
+                    steps = int(getattr(tta_model, "steps", 1) or 1)
+                    denom = max(1, int(total_cnt) * max(1, steps))
+                    stat_line = (
+                        f"[SelStats] scenario={scenario} seed={self.seed} "
+                        f"selected_updates={sel_cnt}/{denom} ({100.0*sel_cnt/denom:.2f}%) "
+                        f"(steps={steps})"
+                    )
                     print(stat_line)
                     try:
                         with open(os.path.join(self.scenario_log_dir, "selected_stats.txt"), "a") as f:
@@ -309,8 +347,35 @@ if __name__ == "__main__":
             "If omitted, all dataset-defined scenarios will be evaluated."
         ),
     )
+    parser.add_argument(
+        '--override',
+        action='append',
+        default=None,
+        help=(
+            "Override scenario hparams in key=value form (repeatable). "
+            "Example: --override batch_size=32 --override adv_sigmas=\"[0.03,0.06]\""
+        ),
+    )
 
     args = parser.parse_args()
+
+    def _parse_override_value(raw):
+        try:
+            return ast.literal_eval(raw)
+        except Exception:
+            lowered = str(raw).strip().lower()
+            if lowered in ("true", "false"):
+                return lowered == "true"
+            return raw
+
+    def _parse_overrides(items):
+        overrides = {}
+        for item in items or []:
+            if "=" not in item:
+                raise ValueError(f"Invalid override '{item}'. Expected key=value.")
+            key, value = item.split("=", 1)
+            overrides[key.strip()] = _parse_override_value(value.strip())
+        return overrides
 
     def _run_single(seed_args):
         trainer = TTATrainer(seed_args)
@@ -325,6 +390,10 @@ if __name__ == "__main__":
                     raise ValueError(f"Invalid scenario format '{entry}'. Expected 'src->trg'.")
                 selected_pairs.append((str(src), str(trg)))
             trainer.dataset_configs.scenarios = selected_pairs
+        overrides = _parse_overrides(seed_args.override)
+        if overrides:
+            for src, trg in trainer.dataset_configs.scenarios:
+                trainer.store_scenario_override(src, trg, overrides)
         trainer.test_time_adaptation()
 
     if args.seeds:
