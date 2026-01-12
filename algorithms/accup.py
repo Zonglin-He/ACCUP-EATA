@@ -12,6 +12,68 @@ from algorithms.base_tta_algorithm import BaseTestTimeAlgorithm
 from utils.utils import safe_torch_load, softmax_entropy_from_logits
 
 
+class NuSTAR_ActiveSearch:
+    """Physically-constrained active search for adversarial amplitude warping."""
+
+    def __init__(self, num_control_points: int = 10, num_candidates: int = 16):
+        self.num_control_points = max(2, int(num_control_points))
+        self.num_candidates = max(1, int(num_candidates))
+
+    @staticmethod
+    def _sample_control_points(
+        num_candidates: int,
+        num_control_points: int,
+        sigma: float,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        if sigma <= 0:
+            return torch.ones(num_candidates, num_control_points, device=device, dtype=dtype)
+        k = torch.randn(num_candidates, num_control_points, device=device, dtype=dtype)
+        k = 1.0 + sigma * k
+        low = 1.0 - 3.0 * sigma
+        high = 1.0 + 3.0 * sigma
+        return k.clamp(min=low, max=high)
+
+    @staticmethod
+    def _upsample_controls(k: torch.Tensor, target_len: int) -> torch.Tensor:
+        if k.size(1) == target_len:
+            return k
+        k_4d = k.unsqueeze(1).unsqueeze(2)  # [N, 1, 1, M]
+        w = F.interpolate(k_4d, size=(1, target_len), mode="bicubic", align_corners=True)
+        return w.squeeze(2).squeeze(1)  # [N, T]
+
+    @torch.no_grad()
+    def __call__(self, x: torch.Tensor, model, sigma: float) -> torch.Tensor:
+        if x.dim() != 3:
+            raise ValueError(f"Expected x with shape [B, C, T], got {tuple(x.shape)}")
+        batch, channels, timesteps = x.shape
+        if timesteps <= 1:
+            return x
+
+        num_points = min(self.num_control_points, timesteps)
+        k = self._sample_control_points(
+            self.num_candidates,
+            num_points,
+            sigma,
+            device=x.device,
+            dtype=x.dtype,
+        )
+        w = self._upsample_controls(k, timesteps).view(self.num_candidates, 1, 1, timesteps)
+
+        x_candidates = x.unsqueeze(0) * w
+        x_flat = x_candidates.view(self.num_candidates * batch, channels, timesteps)
+
+        feats = model.feature_extractor(x_flat)
+        if isinstance(feats, (tuple, list)):
+            feats = feats[0]
+        logits = model.classifier(feats)
+        entropy = softmax_entropy_from_logits(logits).view(self.num_candidates, batch)
+        best_idx = entropy.mean(dim=1).argmax(dim=0)
+        best_w = w[best_idx]  # [1, 1, T]
+        return x * best_w
+
+
 class ACCUP(BaseTestTimeAlgorithm):
     """
     NuSTAR (implemented in ACCUP slot for compatibility).
@@ -29,6 +91,19 @@ class ACCUP(BaseTestTimeAlgorithm):
         self.classifier = self.model.classifier
 
         self.adv_sigmas = self._build_adv_sigmas(hparams.get("adv_sigmas", [0.05, 0.1]))
+        adv_sigma = hparams.get("adv_sigma", None)
+        if adv_sigma is None:
+            try:
+                adv_sigma = max(abs(s) for s in self.adv_sigmas)
+            except ValueError:
+                adv_sigma = 0.0
+        self.adv_sigma = float(adv_sigma)
+        self.adv_ctrl_points = int(hparams.get("adv_ctrl_points", hparams.get("adv_num_control_points", 10)))
+        self.adv_num_candidates = int(hparams.get("adv_num_candidates", 16))
+        self._active_search = NuSTAR_ActiveSearch(
+            num_control_points=self.adv_ctrl_points,
+            num_candidates=self.adv_num_candidates,
+        )
         self.sem_thresh = float(hparams.get("sem_thresh", 0.5))
         self.cons_thresh = float(hparams.get("cons_thresh", 0.5))
         self.proto_momentum = float(hparams.get("proto_momentum", 0.9))
@@ -153,24 +228,7 @@ class ACCUP(BaseTestTimeAlgorithm):
         self.entropy_history.extend(entropy.detach().cpu().tolist())
 
     def get_adversarial_view(self, x: torch.Tensor, model) -> torch.Tensor:
-        best_entropy = None
-        best_view = None
-        with torch.no_grad():
-            for sigma in self.adv_sigmas:
-                x_pert = x * (1.0 + sigma)
-                feats = self._extract_features(model, x_pert)
-                logits = model.classifier(feats)
-                ent = softmax_entropy_from_logits(logits)
-                if best_entropy is None:
-                    best_entropy = ent
-                    best_view = x_pert
-                else:
-                    pick = ent > best_entropy
-                    best_entropy = torch.where(pick, ent, best_entropy)
-                    while pick.dim() < x_pert.dim():
-                        pick = pick.unsqueeze(-1)
-                    best_view = torch.where(pick, x_pert, best_view)
-        return best_view
+        return self._active_search(x, model, self.adv_sigma)
 
     def update_prototypes(self, feats: torch.Tensor, labels: torch.Tensor):
         return self.update_prototypes_with_weights(feats, labels, weights=None)
